@@ -61,8 +61,7 @@ jobs:
         uses: taiki-e/install-action@cargo-llvm-cov
       - name: Generate coverage report
         run: |
-          cargo llvm-cov --all-features --lcov --output-path lcov.info
-          cargo llvm-cov report --all-features --json --output-path coverage.json
+          cargo llvm-cov --all-features --json --output-path coverage.json
       - name: Check coverage threshold
         run: |
           # Extract line coverage percentage from JSON report
