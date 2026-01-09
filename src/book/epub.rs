@@ -52,8 +52,7 @@ pub fn parse_epub_file(path: &Path) -> Result<Book> {
         cover_image: None,
         added_at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0),
+            .map_or(0, |d| d.as_secs() as i64),
         last_accessed: None,
     };
 
@@ -384,7 +383,7 @@ fn extract_code_language(tag: &str) -> Option<String> {
         let quote = rest.chars().next()?;
         if quote == '"' || quote == '\'' {
             let end = rest[1..].find(quote)?;
-            let classes = &rest[1..end + 1];
+            let classes = &rest[1..=end];
 
             // Look for language-xxx pattern
             for class in classes.split_whitespace() {

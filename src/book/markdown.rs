@@ -306,10 +306,10 @@ pub fn parse_markdown_file(path: &Path, section_number: usize) -> Result<Section
         })
         .unwrap_or_else(|| filename.to_string());
 
-    let section_path = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| format!("section{}", section_number));
+    let section_path = path.file_stem().map_or_else(
+        || format!("section{}", section_number),
+        |s| s.to_string_lossy().to_string(),
+    );
 
     let mut section = Section::new(title, section_number, section_path);
     section.content = blocks;
@@ -350,8 +350,7 @@ pub fn parse_markdown_directory(path: &Path) -> Result<Book> {
         cover_image: None,
         added_at: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0),
+            .map_or(0, |d| d.as_secs() as i64),
         last_accessed: None,
     };
 

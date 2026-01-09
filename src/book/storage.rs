@@ -213,8 +213,7 @@ pub fn add_book(source_path: &Path) -> Result<LibraryEntry> {
     // Create library entry
     let now = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
+        .map_or(0, |d| d.as_secs() as i64);
 
     let entry = LibraryEntry {
         metadata: book.metadata.clone(),
