@@ -5,8 +5,10 @@ use ratatui::style::Color;
 use super::Theme;
 
 /// Tokyo Night color palette
+#[allow(clippy::declare_interior_mutable_const)]
 pub const TOKYO_NIGHT: Theme = Theme {
-    name: String::new(), // Will be set properly with const fn when stabilized
+    // Note: String::new() is required in const context, name is set via tokyo_night() fn
+    name: String::new(),
 
     // Background colors
     bg_primary: Color::Rgb(26, 27, 38),   // #1a1b26

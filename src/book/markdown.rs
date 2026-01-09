@@ -13,6 +13,7 @@ use super::model::{
 };
 
 /// Parse a markdown string into content blocks
+#[allow(clippy::cognitive_complexity)]
 pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
     let options = Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
@@ -22,24 +23,24 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
     let parser = Parser::new_ext(markdown, options);
     let mut blocks = Vec::new();
 
-    let mut current_text = String::new();
+    let mut current_text = String::default();
     let mut in_code_block = false;
     let mut code_language: Option<String> = None;
-    let mut code_content = String::new();
+    let mut code_content = String::default();
 
     let mut in_list = false;
     let mut list_items: Vec<String> = Vec::new();
     let mut list_ordered = false;
-    let mut current_list_item = String::new();
+    let mut current_list_item = String::default();
 
     let mut in_blockquote = false;
-    let mut blockquote_content = String::new();
+    let mut blockquote_content = String::default();
 
     let mut in_table = false;
     let mut table_headers: Vec<String> = Vec::new();
     let mut table_rows: Vec<Vec<String>> = Vec::new();
     let mut current_row: Vec<String> = Vec::new();
-    let mut current_cell = String::new();
+    let mut current_cell = String::default();
     let mut table_alignments: Vec<Alignment> = Vec::new();
     let mut in_table_head = false;
 
@@ -314,10 +315,8 @@ pub fn parse_markdown_directory(path: &Path) -> Result<Book> {
     let path = path.canonicalize().with_context(|| format!("Invalid path: {}", path.display()))?;
 
     // Generate book ID from directory name
-    let book_id = path
-        .file_name()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+    let book_id =
+        path.file_name().map_or_else(|| "unknown".to_string(), |s| s.to_string_lossy().to_string());
 
     // Look for README or index as title source
     let readme_path = path.join("README.md");
