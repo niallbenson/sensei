@@ -23,14 +23,11 @@ pub fn parse_epub_file(path: &Path) -> Result<Book> {
         .with_context(|| format!("Failed to parse EPUB: {}", path.display()))?;
 
     // Extract metadata - mdata returns Option<&MetadataItem>, we need the value field
-    let title = doc
-        .mdata("title")
-        .map(|m| m.value.clone())
-        .unwrap_or_else(|| {
-            path.file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Unknown".into())
-        });
+    let title = doc.mdata("title").map(|m| m.value.clone()).unwrap_or_else(|| {
+        path.file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Unknown".into())
+    });
 
     let author = doc.mdata("creator").map(|m| m.value.clone());
     let description = doc.mdata("description").map(|m| m.value.clone());
@@ -211,11 +208,7 @@ fn extract_body_content(xhtml: &str) -> Option<String> {
     let start = xhtml.find("<body")?.checked_add(xhtml[xhtml.find("<body")?..].find('>')?)?;
     let end = xhtml.find("</body>")?;
 
-    if start < end {
-        Some(xhtml[start + 1..end].to_string())
-    } else {
-        None
-    }
+    if start < end { Some(xhtml[start + 1..end].to_string()) } else { None }
 }
 
 /// Convert XHTML to markdown-like format
@@ -394,9 +387,29 @@ fn extract_code_language(tag: &str) -> Option<String> {
 
             // Common code class names
             let lang_classes = [
-                "rust", "python", "javascript", "typescript", "java", "c", "cpp", "go", "ruby",
-                "swift", "kotlin", "scala", "haskell", "ocaml", "sql", "bash", "shell", "json",
-                "yaml", "toml", "xml", "html", "css",
+                "rust",
+                "python",
+                "javascript",
+                "typescript",
+                "java",
+                "c",
+                "cpp",
+                "go",
+                "ruby",
+                "swift",
+                "kotlin",
+                "scala",
+                "haskell",
+                "ocaml",
+                "sql",
+                "bash",
+                "shell",
+                "json",
+                "yaml",
+                "toml",
+                "xml",
+                "html",
+                "css",
             ];
             for class in classes.split_whitespace() {
                 if lang_classes.contains(&class) {
@@ -468,10 +481,7 @@ mod tests {
 
     #[test]
     fn extract_code_language_from_class() {
-        assert_eq!(
-            extract_code_language("pre class=\"language-rust\""),
-            Some("rust".into())
-        );
+        assert_eq!(extract_code_language("pre class=\"language-rust\""), Some("rust".into()));
         assert_eq!(extract_code_language("pre class=\"rust\""), Some("rust".into()));
         assert_eq!(extract_code_language("pre class=\"foo bar\""), None);
     }

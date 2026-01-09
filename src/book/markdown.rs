@@ -82,11 +82,7 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
                 code_language = match kind {
                     CodeBlockKind::Fenced(lang) => {
                         let lang = lang.to_string();
-                        if lang.is_empty() {
-                            None
-                        } else {
-                            Some(lang)
-                        }
+                        if lang.is_empty() { None } else { Some(lang) }
                     }
                     CodeBlockKind::Indented => None,
                 };
@@ -298,18 +294,13 @@ pub fn parse_markdown_file(path: &Path, section_number: usize) -> Result<Section
     let title = blocks
         .iter()
         .find_map(|b| {
-            if let ContentBlock::Heading { level: 1, text } = b {
-                Some(text.clone())
-            } else {
-                None
-            }
+            if let ContentBlock::Heading { level: 1, text } = b { Some(text.clone()) } else { None }
         })
         .unwrap_or_else(|| filename.to_string());
 
-    let section_path = path.file_stem().map_or_else(
-        || format!("section{}", section_number),
-        |s| s.to_string_lossy().to_string(),
-    );
+    let section_path = path
+        .file_stem()
+        .map_or_else(|| format!("section{}", section_number), |s| s.to_string_lossy().to_string());
 
     let mut section = Section::new(title, section_number, section_path);
     section.content = blocks;
@@ -428,11 +419,7 @@ fn extract_title_from_file(path: &Path) -> Option<String> {
     let content = fs::read_to_string(path).ok()?;
     let blocks = parse_markdown_content(&content);
     blocks.iter().find_map(|b| {
-        if let ContentBlock::Heading { level: 1, text } = b {
-            Some(text.clone())
-        } else {
-            None
-        }
+        if let ContentBlock::Heading { level: 1, text } = b { Some(text.clone()) } else { None }
     })
 }
 
@@ -444,7 +431,9 @@ mod tests {
     fn parse_heading() {
         let blocks = parse_markdown_content("# Hello World");
         assert_eq!(blocks.len(), 1);
-        assert!(matches!(&blocks[0], ContentBlock::Heading { level: 1, text } if text == "Hello World"));
+        assert!(
+            matches!(&blocks[0], ContentBlock::Heading { level: 1, text } if text == "Hello World")
+        );
     }
 
     #[test]
@@ -461,7 +450,9 @@ mod tests {
     fn parse_paragraph() {
         let blocks = parse_markdown_content("This is a paragraph.");
         assert_eq!(blocks.len(), 1);
-        assert!(matches!(&blocks[0], ContentBlock::Paragraph(text) if text == "This is a paragraph."));
+        assert!(
+            matches!(&blocks[0], ContentBlock::Paragraph(text) if text == "This is a paragraph.")
+        );
     }
 
     #[test]

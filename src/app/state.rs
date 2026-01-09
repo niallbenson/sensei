@@ -28,11 +28,7 @@ pub struct LandingAnimation {
 
 impl Default for LandingAnimation {
     fn default() -> Self {
-        Self {
-            start_time: Instant::now(),
-            current_frame: 0,
-            complete: false,
-        }
+        Self { start_time: Instant::now(), current_frame: 0, complete: false }
     }
 }
 

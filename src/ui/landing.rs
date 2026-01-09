@@ -108,10 +108,7 @@ fn build_enso(progress: f32) -> String {
     }
 
     // Convert grid to string
-    grid.iter()
-        .map(|row| row.iter().collect::<String>())
-        .collect::<Vec<_>>()
-        .join("\n")
+    grid.iter().map(|row| row.iter().collect::<String>()).collect::<Vec<_>>().join("\n")
 }
 
 /// Draw the landing screen with ensō animation
@@ -124,9 +121,7 @@ pub fn draw(frame: &mut Frame, animation: &LandingAnimation, theme: &Theme) {
 
     // Build and render the ensō
     let enso_str = build_enso(animation.enso_progress());
-    let enso_style = Style::default()
-        .fg(theme.accent_primary)
-        .bg(theme.bg_primary);
+    let enso_style = Style::default().fg(theme.accent_primary).bg(theme.bg_primary);
 
     // Center the ensō vertically in upper portion
     let enso_y = (area.height / 4).min(area.height.saturating_sub(ENSO_ROWS as u16 + 15));
@@ -136,9 +131,7 @@ pub fn draw(frame: &mut Frame, animation: &LandingAnimation, theme: &Theme) {
         width: area.width,
         height: (ENSO_ROWS as u16).min(area.height.saturating_sub(enso_y)),
     };
-    let enso = Paragraph::new(enso_str)
-        .style(enso_style)
-        .alignment(Alignment::Center);
+    let enso = Paragraph::new(enso_str).style(enso_style).alignment(Alignment::Center);
     frame.render_widget(enso, enso_area);
 
     // Title "SENSEI" - fade in character by character
@@ -149,9 +142,7 @@ pub fn draw(frame: &mut Frame, animation: &LandingAnimation, theme: &Theme) {
         let padding = " ".repeat(6 - title_chars);
         let padded_title = format!("{}{}", visible_title, padding);
 
-        let title_style = Style::default()
-            .fg(theme.fg_secondary)
-            .bg(theme.bg_primary);
+        let title_style = Style::default().fg(theme.fg_secondary).bg(theme.bg_primary);
 
         let title_y = enso_area.y + enso_area.height + 2;
         if title_y < area.height {
@@ -161,18 +152,15 @@ pub fn draw(frame: &mut Frame, animation: &LandingAnimation, theme: &Theme) {
                 width: area.width,
                 height: 1.min(area.height.saturating_sub(title_y)),
             };
-            let title = Paragraph::new(padded_title)
-                .style(title_style)
-                .alignment(Alignment::Center);
+            let title =
+                Paragraph::new(padded_title).style(title_style).alignment(Alignment::Center);
             frame.render_widget(title, title_area);
         }
     }
 
     // Tagline
     if animation.show_tagline() {
-        let tagline_style = Style::default()
-            .fg(theme.fg_muted)
-            .bg(theme.bg_primary);
+        let tagline_style = Style::default().fg(theme.fg_muted).bg(theme.bg_primary);
 
         let tagline_y = enso_area.y + enso_area.height + 5;
         if tagline_y < area.height {
@@ -182,9 +170,7 @@ pub fn draw(frame: &mut Frame, animation: &LandingAnimation, theme: &Theme) {
                 width: area.width,
                 height: 1.min(area.height.saturating_sub(tagline_y)),
             };
-            let tagline = Paragraph::new(TAGLINE)
-                .style(tagline_style)
-                .alignment(Alignment::Center);
+            let tagline = Paragraph::new(TAGLINE).style(tagline_style).alignment(Alignment::Center);
             frame.render_widget(tagline, tagline_area);
         }
     }
@@ -193,9 +179,7 @@ pub fn draw(frame: &mut Frame, animation: &LandingAnimation, theme: &Theme) {
     if animation.complete {
         let blink = (animation.start_time.elapsed().as_millis() / 500) % 2 == 0;
         if blink {
-            let prompt_style = Style::default()
-                .fg(theme.fg_muted)
-                .bg(theme.bg_primary);
+            let prompt_style = Style::default().fg(theme.fg_muted).bg(theme.bg_primary);
 
             let prompt_y = enso_area.y + enso_area.height + 9;
             if prompt_y < area.height {
@@ -205,9 +189,8 @@ pub fn draw(frame: &mut Frame, animation: &LandingAnimation, theme: &Theme) {
                     width: area.width,
                     height: 1.min(area.height.saturating_sub(prompt_y)),
                 };
-                let prompt = Paragraph::new(PROMPT)
-                    .style(prompt_style)
-                    .alignment(Alignment::Center);
+                let prompt =
+                    Paragraph::new(PROMPT).style(prompt_style).alignment(Alignment::Center);
                 frame.render_widget(prompt, prompt_area);
             }
         }
