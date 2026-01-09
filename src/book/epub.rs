@@ -23,21 +23,20 @@ pub fn parse_epub_file(path: &Path) -> Result<Book> {
         .with_context(|| format!("Failed to parse EPUB: {}", path.display()))?;
 
     // Extract metadata - mdata returns Option<&MetadataItem>, we need the value field
-    let title = doc.mdata("title").map(|m| m.value.clone()).unwrap_or_else(|| {
-        path.file_stem()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Unknown".into())
-    });
+    let title = doc.mdata("title").map_or_else(
+        || path.file_stem().map_or_else(|| "Unknown".into(), |s| s.to_string_lossy().to_string()),
+        |m| m.value.clone(),
+    );
 
     let author = doc.mdata("creator").map(|m| m.value.clone());
     let description = doc.mdata("description").map(|m| m.value.clone());
     let language = doc.mdata("language").map(|m| m.value.clone());
 
     // Generate book ID from filename
-    let book_id = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().to_string().to_lowercase().replace(' ', "-"))
-        .unwrap_or_else(|| "unknown".to_string());
+    let book_id = path.file_stem().map_or_else(
+        || "unknown".to_string(),
+        |s| s.to_string_lossy().to_string().to_lowercase().replace(' ', "-"),
+    );
 
     let metadata = BookMetadata {
         id: book_id,
@@ -103,7 +102,7 @@ pub fn parse_epub_file(path: &Path) -> Result<Book> {
 
             let section_path = format!(
                 "ch{:02}/s{:02}",
-                current_chapter.as_ref().map(|c| c.number).unwrap_or(1),
+                current_chapter.as_ref().map_or(1, |c| c.number),
                 section_num
             );
 
@@ -217,7 +216,7 @@ fn xhtml_to_markdown(xhtml: &str) -> String {
 
     // Simple state machine for conversion
     let mut in_tag = false;
-    let mut current_tag = String::new();
+    let mut current_tag = String::default();
     let mut tag_stack: Vec<String> = Vec::new();
 
     for c in xhtml.chars() {
@@ -245,6 +244,7 @@ fn xhtml_to_markdown(xhtml: &str) -> String {
 }
 
 /// Process an HTML tag and convert to markdown
+#[allow(clippy::cognitive_complexity)]
 fn process_tag(tag: &str, output: &mut String, tag_stack: &mut Vec<String>) {
     let tag_lower = tag.to_lowercase();
     let is_closing = tag_lower.starts_with('/');

@@ -1,15 +1,19 @@
 //! UI rendering components
 
+pub mod content;
+pub mod curriculum;
 pub mod landing;
 pub mod layout;
+pub mod main_screen;
 
 use ratatui::Frame;
 
 use crate::app::state::{AppState, Screen};
 use crate::config::Config;
+use crate::config::progress::Progress;
 
 /// Main draw function
-pub fn draw(frame: &mut Frame, state: &AppState, config: &Config) {
+pub fn draw(frame: &mut Frame, state: &AppState, config: &Config, progress: &Progress) {
     let theme = config.active_theme();
 
     match &state.screen {
@@ -17,8 +21,7 @@ pub fn draw(frame: &mut Frame, state: &AppState, config: &Config) {
             landing::draw(frame, &state.landing_animation, &theme);
         }
         Screen::Main => {
-            // TODO: Implement main screen
-            layout::draw_placeholder(frame, "Main Screen - Coming Soon", &theme);
+            main_screen::draw(frame, state, &theme, progress);
         }
         Screen::Quiz => {
             layout::draw_placeholder(frame, "Quiz - Coming Soon", &theme);

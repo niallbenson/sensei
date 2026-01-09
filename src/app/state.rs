@@ -1,6 +1,9 @@
 //! Application state definitions
 
+use std::collections::HashSet;
 use std::time::Instant;
+
+use crate::book::Book;
 
 /// Which screen is currently displayed
 #[derive(Debug, Clone, Default)]
@@ -11,6 +14,63 @@ pub enum Screen {
     Quiz,
     Notes,
     Help,
+}
+
+/// Which panel is currently focused
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Panel {
+    Curriculum,
+    #[default]
+    Content,
+    Notes,
+}
+
+/// Panel visibility settings
+#[derive(Debug, Clone)]
+pub struct PanelVisibility {
+    /// Show the curriculum (left) panel
+    pub curriculum: bool,
+    /// Show the notes (right) panel
+    pub notes: bool,
+}
+
+impl Default for PanelVisibility {
+    fn default() -> Self {
+        Self { curriculum: true, notes: false }
+    }
+}
+
+/// State for the curriculum tree browser
+#[derive(Debug, Clone, Default)]
+pub struct CurriculumState {
+    /// Currently selected item index (flat index in tree)
+    pub selected_index: usize,
+    /// Which chapter indices are expanded
+    pub expanded_chapters: HashSet<usize>,
+    /// Scroll offset for long curricula
+    pub scroll_offset: usize,
+}
+
+/// State for content rendering
+#[derive(Debug, Clone, Default)]
+pub struct ContentState {
+    /// Current scroll position (lines from top)
+    pub scroll_offset: usize,
+    /// Total rendered lines (updated on render)
+    pub total_lines: usize,
+    /// Line indices that match current search
+    pub search_matches: Vec<usize>,
+    /// Currently highlighted match index
+    pub current_match: Option<usize>,
+}
+
+/// State for search mode
+#[derive(Debug, Clone, Default)]
+pub struct SearchState {
+    /// Whether search mode is active
+    pub active: bool,
+    /// Current search query
+    pub query: String,
 }
 
 /// State for the landing animation
@@ -95,8 +155,8 @@ pub struct AppState {
     /// Landing animation state
     pub landing_animation: LandingAnimation,
 
-    /// Currently selected book (if any)
-    pub current_book: Option<String>,
+    /// Currently loaded book (if any)
+    pub book: Option<Book>,
 
     /// Currently selected chapter index
     pub current_chapter: usize,
@@ -104,6 +164,18 @@ pub struct AppState {
     /// Currently selected section index
     pub current_section: usize,
 
-    /// Scroll offset in content view
-    pub scroll_offset: usize,
+    /// Panel visibility settings
+    pub panel_visibility: PanelVisibility,
+
+    /// Currently focused panel
+    pub focused_panel: Panel,
+
+    /// Curriculum browser state
+    pub curriculum: CurriculumState,
+
+    /// Content rendering state
+    pub content: ContentState,
+
+    /// Search state
+    pub search: SearchState,
 }
