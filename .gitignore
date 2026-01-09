@@ -10,3 +10,6 @@ Cargo.lock
 # Development planning files
 sensei-*.md
 .claude/
+
+# MCP configuration (contains secrets)
+.mcp.json
