@@ -255,11 +255,8 @@ impl Table {
     /// Word count for the table
     pub fn word_count(&self) -> usize {
         let header_words: usize = self.headers.iter().map(|s| s.split_whitespace().count()).sum();
-        let row_words: usize = self
-            .rows
-            .iter()
-            .flat_map(|row| row.iter().map(|s| s.split_whitespace().count()))
-            .sum();
+        let row_words: usize =
+            self.rows.iter().flat_map(|row| row.iter().map(|s| s.split_whitespace().count())).sum();
         header_words + row_words
     }
 
@@ -345,9 +342,8 @@ mod tests {
 
     #[test]
     fn code_block_builder() {
-        let code = CodeBlock::new("println!(\"Hello\");")
-            .with_language("rust")
-            .with_filename("main.rs");
+        let code =
+            CodeBlock::new("println!(\"Hello\");").with_language("rust").with_filename("main.rs");
 
         assert_eq!(code.language, Some("rust".into()));
         assert_eq!(code.filename, Some("main.rs".into()));

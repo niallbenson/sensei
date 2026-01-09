@@ -106,7 +106,8 @@ impl Library {
 /// Get the books directory
 pub fn books_dir() -> Result<PathBuf> {
     let dir = Config::data_dir()?.join("books");
-    fs::create_dir_all(&dir).with_context(|| format!("Failed to create books directory {:?}", dir))?;
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("Failed to create books directory {:?}", dir))?;
     Ok(dir)
 }
 
@@ -136,9 +137,13 @@ fn is_cache_valid(cached_mtime: Option<i64>, source_path: &Path) -> bool {
 /// Get modification time of a source (file or directory)
 fn get_source_mtime(path: &Path) -> Option<i64> {
     if path.is_file() {
-        fs::metadata(path).ok()?.modified().ok()?.duration_since(SystemTime::UNIX_EPOCH).ok().map(
-            |d| d.as_secs() as i64,
-        )
+        fs::metadata(path)
+            .ok()?
+            .modified()
+            .ok()?
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .ok()
+            .map(|d| d.as_secs() as i64)
     } else if path.is_dir() {
         // For directories, find the most recent modification
         let mut latest: Option<i64> = None;
@@ -211,9 +216,8 @@ pub fn add_book(source_path: &Path) -> Result<LibraryEntry> {
     };
 
     // Create library entry
-    let now = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs() as i64);
+    let now =
+        SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64);
 
     let entry = LibraryEntry {
         metadata: book.metadata.clone(),

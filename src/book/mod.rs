@@ -11,4 +11,4 @@ pub mod storage;
 pub use model::{
     Alignment, Book, BookMetadata, BookSource, Chapter, CodeBlock, ContentBlock, Section, Table,
 };
-pub use storage::{add_book, load_book, remove_book, Library, LibraryEntry};
+pub use storage::{Library, LibraryEntry, add_book, load_book, remove_book};
