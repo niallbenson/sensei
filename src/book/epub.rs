@@ -24,10 +24,7 @@ pub fn parse_epub_file(path: &Path) -> Result<Book> {
 
     // Extract metadata - mdata returns Option<&MetadataItem>, we need the value field
     let title = doc.mdata("title").map_or_else(
-        || {
-            path.file_stem()
-                .map_or_else(|| "Unknown".into(), |s| s.to_string_lossy().to_string())
-        },
+        || path.file_stem().map_or_else(|| "Unknown".into(), |s| s.to_string_lossy().to_string()),
         |m| m.value.clone(),
     );
 
