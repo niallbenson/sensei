@@ -5,16 +5,16 @@ use serde::{Deserialize, Serialize};
 /// Available Claude models
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ClaudeModel {
-    /// Claude 3.5 Haiku - fast and cost-effective
+    /// Claude Haiku 4.5 - fast and cost-effective ($1/$5 per MTok)
     #[default]
-    Haiku35,
-    /// Claude 3.5 Sonnet - balanced (older)
-    Sonnet35,
-    /// Claude Sonnet 4 - capable
+    Haiku45,
+    /// Claude Haiku 3 - legacy fast model ($0.25/$1.25 per MTok)
+    Haiku3,
+    /// Claude Sonnet 4 - capable ($3/$15 per MTok)
     Sonnet4,
-    /// Claude Sonnet 4.5 - latest Sonnet
+    /// Claude Sonnet 4.5 - latest Sonnet ($3/$15 per MTok)
     Sonnet45,
-    /// Claude Opus 4.5 - most capable
+    /// Claude Opus 4.5 - most capable ($5/$25 per MTok)
     Opus45,
 }
 
@@ -22,10 +22,10 @@ impl ClaudeModel {
     /// Get the API model identifier
     pub fn model_id(&self) -> &'static str {
         match self {
-            Self::Haiku35 => "claude-3-5-haiku-20241022",
-            Self::Sonnet35 => "claude-3-5-sonnet-20241022",
+            Self::Haiku45 => "claude-haiku-4-5-20251001",
+            Self::Haiku3 => "claude-3-haiku-20240307",
             Self::Sonnet4 => "claude-sonnet-4-20250514",
-            Self::Sonnet45 => "claude-sonnet-4-5-20250514",
+            Self::Sonnet45 => "claude-sonnet-4-5-20250929",
             Self::Opus45 => "claude-opus-4-5-20251101",
         }
     }
@@ -33,29 +33,39 @@ impl ClaudeModel {
     /// Get a human-readable display name
     pub fn display_name(&self) -> &'static str {
         match self {
-            Self::Haiku35 => "Claude 3.5 Haiku",
-            Self::Sonnet35 => "Claude 3.5 Sonnet",
+            Self::Haiku45 => "Claude Haiku 4.5",
+            Self::Haiku3 => "Claude Haiku 3",
             Self::Sonnet4 => "Claude Sonnet 4",
             Self::Sonnet45 => "Claude Sonnet 4.5",
             Self::Opus45 => "Claude Opus 4.5",
         }
     }
 
-    /// Parse model from string (for command line)
+    /// Parse model from string (for command line or model ID)
     pub fn parse(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
-            "haiku" | "haiku35" | "3.5-haiku" => Some(Self::Haiku35),
-            "sonnet35" | "3.5-sonnet" => Some(Self::Sonnet35),
+            // User-friendly names
+            "haiku" | "haiku45" | "haiku4.5" => Some(Self::Haiku45),
+            "haiku3" => Some(Self::Haiku3),
             "sonnet4" => Some(Self::Sonnet4),
-            "sonnet" | "sonnet45" | "4.5-sonnet" => Some(Self::Sonnet45),
-            "opus" | "opus45" | "4.5-opus" => Some(Self::Opus45),
+            "sonnet" | "sonnet45" | "sonnet4.5" => Some(Self::Sonnet45),
+            "opus" | "opus45" | "opus4.5" => Some(Self::Opus45),
+            // Model IDs (for session restoration)
+            "claude-haiku-4-5-20251001" => Some(Self::Haiku45),
+            "claude-3-haiku-20240307" => Some(Self::Haiku3),
+            "claude-sonnet-4-20250514" => Some(Self::Sonnet4),
+            "claude-sonnet-4-5-20250929" => Some(Self::Sonnet45),
+            "claude-opus-4-5-20251101" => Some(Self::Opus45),
+            // Legacy model IDs (for backward compatibility)
+            "claude-3-5-haiku-20241022" => Some(Self::Haiku45),
+            "claude-3-5-sonnet-20241022" => Some(Self::Sonnet45),
             _ => None,
         }
     }
 
     /// List all available models
     pub fn all() -> &'static [ClaudeModel] {
-        &[Self::Haiku35, Self::Sonnet35, Self::Sonnet4, Self::Sonnet45, Self::Opus45]
+        &[Self::Haiku45, Self::Haiku3, Self::Sonnet4, Self::Sonnet45, Self::Opus45]
     }
 }
 
@@ -64,7 +74,7 @@ impl std::str::FromStr for ClaudeModel {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Self::parse(s)
-            .ok_or_else(|| format!("Unknown model: {}. Options: haiku, sonnet35, sonnet, opus", s))
+            .ok_or_else(|| format!("Unknown model: {}. Options: haiku, haiku3, sonnet4, sonnet, opus", s))
     }
 }
 
@@ -217,24 +227,24 @@ mod tests {
 
     #[test]
     fn model_parse() {
-        assert_eq!(ClaudeModel::parse("haiku"), Some(ClaudeModel::Haiku35));
-        assert_eq!(ClaudeModel::parse("sonnet35"), Some(ClaudeModel::Sonnet35));
+        assert_eq!(ClaudeModel::parse("haiku"), Some(ClaudeModel::Haiku45));
+        assert_eq!(ClaudeModel::parse("haiku3"), Some(ClaudeModel::Haiku3));
         assert_eq!(ClaudeModel::parse("sonnet4"), Some(ClaudeModel::Sonnet4));
         assert_eq!(ClaudeModel::parse("sonnet"), Some(ClaudeModel::Sonnet45));
         assert_eq!(ClaudeModel::parse("sonnet45"), Some(ClaudeModel::Sonnet45));
         assert_eq!(ClaudeModel::parse("opus"), Some(ClaudeModel::Opus45));
-        assert_eq!(ClaudeModel::parse("HAIKU"), Some(ClaudeModel::Haiku35));
+        assert_eq!(ClaudeModel::parse("HAIKU"), Some(ClaudeModel::Haiku45));
         assert_eq!(ClaudeModel::parse("unknown"), None);
     }
 
     #[test]
     fn create_message_request() {
         let messages = vec![Message::user("Hello")];
-        let request = CreateMessageRequest::new(ClaudeModel::Haiku35, messages)
+        let request = CreateMessageRequest::new(ClaudeModel::Haiku45, messages)
             .with_system("You are helpful")
             .with_max_tokens(1000);
 
-        assert_eq!(request.model, "claude-3-5-haiku-20241022");
+        assert_eq!(request.model, "claude-haiku-4-5-20251001");
         assert_eq!(request.max_tokens, 1000);
         assert_eq!(request.system, Some("You are helpful".to_string()));
         assert!(request.stream);

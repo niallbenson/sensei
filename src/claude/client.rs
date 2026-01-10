@@ -134,7 +134,7 @@ impl ClaudeClient {
     pub async fn test_connection(&self) -> Result<(), ClaudeError> {
         use super::models::{ClaudeModel, Message};
 
-        let request = CreateMessageRequest::new(ClaudeModel::Haiku35, vec![Message::user("Hi")])
+        let request = CreateMessageRequest::new(ClaudeModel::Haiku45, vec![Message::user("Hi")])
             .with_max_tokens(10)
             .without_streaming();
 

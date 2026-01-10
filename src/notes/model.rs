@@ -89,6 +89,51 @@ impl Note {
     pub fn is_selection_note(&self) -> bool {
         matches!(self.anchor, NoteAnchor::TextRange { .. })
     }
+
+    /// Create a new Claude Q&A note (selection-based)
+    pub fn new_claude_note(
+        book_id: &str,
+        section_path: &str,
+        question: &str,
+        answer: &str,
+        block_index: Option<usize>,
+        start_char: Option<usize>,
+        selected_text: Option<&str>,
+    ) -> Self {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64);
+
+        // Format content as Q&A
+        let content = format!("**Q:** {}\n\n**A:** {}", question, answer);
+
+        // Determine anchor type based on whether we have selection info
+        let anchor = match (block_index, start_char, selected_text) {
+            (Some(block), Some(char_pos), Some(text)) => NoteAnchor::TextRange {
+                block_index: block,
+                start_char: char_pos,
+                char_length: text.chars().count(),
+                selected_text: text.to_string(),
+            },
+            _ => NoteAnchor::Section,
+        };
+
+        Self {
+            id: generate_id(),
+            book_id: book_id.to_string(),
+            section_path: section_path.to_string(),
+            content,
+            created_at: now,
+            updated_at: now,
+            source: NoteSource::Claude,
+            anchor,
+        }
+    }
+
+    /// Check if this is a Claude-generated note
+    pub fn is_claude_note(&self) -> bool {
+        matches!(self.source, NoteSource::Claude)
+    }
 }
 
 /// Where a note originated from

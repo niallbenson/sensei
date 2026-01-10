@@ -53,6 +53,15 @@ pub struct App {
 
     /// Cancellation token for current Claude request
     claude_cancel: Option<tokio_util::sync::CancellationToken>,
+
+    /// Channel receiver for quiz generation results
+    quiz_rx: Option<tokio::sync::mpsc::Receiver<QuizGenerationResult>>,
+}
+
+/// Result from quiz generation task
+enum QuizGenerationResult {
+    Success(Vec<crate::app::state::QuizQuestion>),
+    Error(String),
 }
 
 impl App {
@@ -76,6 +85,7 @@ impl App {
             terminal,
             claude_rx: None,
             claude_cancel: None,
+            quiz_rx: None,
         };
 
         // Apply saved panel widths from session
@@ -84,6 +94,13 @@ impl App {
 
         // Check if Claude API key is configured
         app.state.claude.needs_setup = !crate::claude::ApiKeyManager::has_api_key();
+
+        // Restore Claude model preference from session
+        if let Some(model_str) = &app.session.claude_model {
+            if let Some(model) = crate::claude::ClaudeModel::parse(model_str) {
+                app.state.claude.model = model;
+            }
+        }
 
         // Auto-load first book from library if available
         app.auto_load_book();
@@ -165,6 +182,9 @@ impl App {
             self.state.panel_visibility.curriculum_width_percent;
         self.session.notes_width_percent = self.state.panel_visibility.notes_width_percent;
 
+        // Save Claude model preference
+        self.session.claude_model = Some(self.state.claude.model.model_id().to_string());
+
         // Save book-specific state if a book is loaded
         if let Some(book) = &self.state.book {
             let book_id = book.metadata.id.clone();
@@ -207,6 +227,9 @@ impl App {
 
             // Process Claude streaming events (non-blocking)
             self.process_claude_events();
+
+            // Process quiz generation results (non-blocking)
+            self.process_quiz_events();
 
             // Handle all pending events before next redraw (makes scrolling feel faster)
             let mut should_quit = false;
@@ -337,6 +360,11 @@ impl App {
 
     /// Handle actions on the main screen
     fn handle_main_action(&mut self, action: Action) -> Result<bool> {
+        // Handle quiz input if quiz is active
+        if self.state.quiz.active {
+            return self.handle_quiz_action(action);
+        }
+
         // If content panel is focused, handle cursor/visual mode
         if self.state.focused_panel == Panel::Content && self.state.content.cursor_mode {
             return self.handle_content_cursor_action(action);
@@ -391,11 +419,20 @@ impl App {
             },
 
             // Panel navigation (h/l move between panels)
+            // But when footer is focused, switch between footer buttons instead
             Action::Left => {
-                self.move_panel_focus_left();
+                if self.state.focused_panel == Panel::Content && self.state.content.footer_focused {
+                    self.state.content.footer_prev();
+                } else {
+                    self.move_panel_focus_left();
+                }
             }
             Action::Right => {
-                self.move_panel_focus_right();
+                if self.state.focused_panel == Panel::Content && self.state.content.footer_focused {
+                    self.state.content.footer_next();
+                } else {
+                    self.move_panel_focus_right();
+                }
             }
 
             // Vertical navigation depends on focused panel
@@ -833,6 +870,310 @@ impl App {
         }
     }
 
+    /// Mark current section as complete and navigate to next section
+    fn complete_section_and_next(&mut self) {
+        // Mark current section as complete
+        self.mark_section_complete();
+
+        // Navigate to next section
+        self.navigate_to_next_section();
+    }
+
+    /// Mark the current section as complete (not just viewed)
+    fn mark_section_complete(&mut self) {
+        let Some(book) = &self.state.book else { return };
+        let Some(section) =
+            book.get_section(self.state.current_chapter, self.state.current_section)
+        else {
+            return;
+        };
+
+        let book_progress = self.progress.book_mut(&book.metadata.id);
+        let section_progress = book_progress.sections.entry(section.path.clone()).or_default();
+
+        section_progress.completed = true;
+        section_progress.viewed = true;
+        section_progress.last_accessed = Some(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs() as i64),
+        );
+        if let Err(e) = self.progress.save() {
+            tracing::warn!("Failed to save progress: {}", e);
+        }
+
+        self.state.command_line.set_message("Section marked complete!");
+    }
+
+    /// Navigate to the next section in the book
+    fn navigate_to_next_section(&mut self) {
+        let Some(book) = &self.state.book else { return };
+
+        let current_chapter = self.state.current_chapter;
+        let current_section = self.state.current_section;
+
+        // Try next section in current chapter
+        if let Some(chapter) = book.chapters.get(current_chapter) {
+            if current_section + 1 < chapter.sections.len() {
+                // Next section in same chapter
+                self.state.current_section = current_section + 1;
+            } else if current_chapter + 1 < book.chapters.len() {
+                // First section of next chapter
+                self.state.current_chapter = current_chapter + 1;
+                self.state.current_section = 0;
+                // Expand the new chapter in curriculum
+                self.state.curriculum.expanded_chapters.insert(current_chapter + 1);
+            } else {
+                // End of book
+                self.state.command_line.set_message("Congratulations! You've completed the book!");
+                self.state.content.exit_footer();
+                return;
+            }
+        } else {
+            return;
+        }
+
+        // Reset scroll and footer state
+        self.state.content.scroll_offset = 0;
+        self.state.content.exit_footer();
+
+        // Mark new section as viewed
+        self.mark_section_viewed();
+
+        self.state.command_line.set_message("Moving to next section...");
+    }
+
+    /// Start the quiz for current section
+    fn start_quiz(&mut self) {
+        let Some(book) = &self.state.book else { return };
+        let Some(section) =
+            book.get_section(self.state.current_chapter, self.state.current_section)
+        else {
+            return;
+        };
+
+        // Check for API key
+        if self.state.claude.needs_setup {
+            self.state.command_line.set_error("API key not set. Use :claude-key <key>");
+            return;
+        }
+
+        // Get API key
+        let api_key = match crate::claude::ApiKeyManager::get_api_key() {
+            Ok(key) => key,
+            Err(e) => {
+                self.state.command_line.set_error(format!("Failed to get API key: {}", e));
+                return;
+            }
+        };
+
+        // Reset quiz state and set loading
+        self.state.quiz.start_loading(&section.path);
+        self.state.command_line.set_message("Generating quiz questions...");
+
+        // Get section content for the prompt
+        let section_title = section.title.clone();
+        let section_content = section.plain_text();
+
+        // Truncate content if too long
+        let content = if section_content.len() > 6000 {
+            format!("{}...\n\n[Content truncated]", &section_content[..6000])
+        } else {
+            section_content
+        };
+
+        // Create channel for results
+        let (tx, rx) = tokio::sync::mpsc::channel(1);
+        self.quiz_rx = Some(rx);
+
+        let model = self.state.claude.model;
+
+        // Spawn the quiz generation task
+        tokio::spawn(async move {
+            let result = generate_quiz_questions(api_key, model, &section_title, &content).await;
+            let _ = tx.send(result).await;
+        });
+    }
+}
+
+/// Generate quiz questions using Claude API
+async fn generate_quiz_questions(
+    api_key: String,
+    model: crate::claude::ClaudeModel,
+    section_title: &str,
+    content: &str,
+) -> QuizGenerationResult {
+    use crate::claude::{ClaudeClient, CreateMessageRequest, Message};
+
+    let client = ClaudeClient::new(api_key);
+
+    let prompt = format!(
+        r#"Based on this educational content about "{}", generate exactly 5 multiple-choice quiz questions to test comprehension.
+
+Content:
+{}
+
+Generate your response as a JSON object with this exact structure:
+{{
+  "questions": [
+    {{
+      "question": "The question text",
+      "options": ["Option A", "Option B", "Option C", "Option D"],
+      "correct_index": 0
+    }}
+  ]
+}}
+
+Requirements:
+- Exactly 5 questions
+- Exactly 4 options per question
+- correct_index is 0-3 indicating which option is correct
+- Questions should test understanding, not just memorization
+- Make questions challenging but fair based on the content provided
+
+Respond with ONLY the JSON object, no other text."#,
+        section_title, content
+    );
+
+    let messages = vec![Message::user(prompt)];
+    let request = CreateMessageRequest::new(model, messages)
+        .with_max_tokens(2000)
+        .without_streaming();
+
+    match client.send_message(request).await {
+        Ok(response) => {
+            // Extract text from response content blocks
+            let text = response.content.iter()
+                .filter_map(|block| block.text.as_deref())
+                .collect::<Vec<_>>()
+                .join("");
+
+            // Parse JSON response
+            match parse_quiz_json(&text) {
+                Ok(questions) => QuizGenerationResult::Success(questions),
+                Err(e) => QuizGenerationResult::Error(format!("Failed to parse quiz: {}", e)),
+            }
+        }
+        Err(e) => QuizGenerationResult::Error(format!("API error: {}", e)),
+    }
+}
+
+/// Parse quiz questions from Claude's JSON response
+fn parse_quiz_json(text: &str) -> Result<Vec<crate::app::state::QuizQuestion>> {
+    use crate::app::state::QuizQuestion;
+
+    // Try to extract JSON from the response (Claude might add markdown code blocks)
+    let json_str = if text.contains("```json") {
+        text.split("```json").nth(1)
+            .and_then(|s| s.split("```").next())
+            .unwrap_or(text)
+            .trim()
+    } else if text.contains("```") {
+        text.split("```").nth(1)
+            .and_then(|s| s.split("```").next())
+            .unwrap_or(text)
+            .trim()
+    } else {
+        text.trim()
+    };
+
+    #[derive(serde::Deserialize)]
+    struct QuizResponse {
+        questions: Vec<QuestionJson>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct QuestionJson {
+        question: String,
+        options: Vec<String>,
+        correct_index: usize,
+    }
+
+    let response: QuizResponse = serde_json::from_str(json_str)
+        .map_err(|e| anyhow::anyhow!("JSON parse error: {} in text: {}", e, json_str))?;
+
+    if response.questions.len() != 5 {
+        return Err(anyhow::anyhow!("Expected 5 questions, got {}", response.questions.len()));
+    }
+
+    let questions: Vec<QuizQuestion> = response.questions.into_iter().map(|q| {
+        QuizQuestion {
+            question: q.question,
+            options: q.options,
+            correct_index: q.correct_index,
+        }
+    }).collect();
+
+    Ok(questions)
+}
+
+impl App {
+
+    /// Handle actions when quiz overlay is active
+    fn handle_quiz_action(&mut self, action: Action) -> Result<bool> {
+        match action {
+            Action::Quit => return Ok(true),
+
+            Action::Back => {
+                // Escape closes quiz
+                self.state.quiz.close();
+                self.state.command_line.clear_message();
+            }
+
+            Action::Up => {
+                // In question mode, move to previous option
+                if !self.state.quiz.loading && !self.state.quiz.completed {
+                    self.state.quiz.select_prev();
+                }
+            }
+
+            Action::Down => {
+                // In question mode, move to next option
+                if !self.state.quiz.loading && !self.state.quiz.completed {
+                    self.state.quiz.select_next();
+                }
+            }
+
+            Action::Select => {
+                if self.state.quiz.loading {
+                    // Ignore while loading
+                } else if self.state.quiz.error.is_some() {
+                    // Retry on error
+                    self.retry_quiz();
+                } else if self.state.quiz.completed {
+                    if self.state.quiz.passed() {
+                        // Passed - complete section and continue
+                        self.state.quiz.close();
+                        self.mark_section_complete();
+                        self.navigate_to_next_section();
+                    } else {
+                        // Failed - retry
+                        self.state.quiz.retry();
+                    }
+                } else {
+                    // Confirm current answer
+                    self.state.quiz.confirm_answer();
+                }
+            }
+
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    /// Retry quiz generation after error
+    fn retry_quiz(&mut self) {
+        let Some(book) = &self.state.book else { return };
+        let Some(section) =
+            book.get_section(self.state.current_chapter, self.state.current_section)
+        else {
+            return;
+        };
+
+        self.state.quiz.start_loading(&section.path);
+        self.state.command_line.set_message("Retrying quiz generation...");
+    }
+
     /// Start creating a new note
     fn start_creating_note(&mut self) {
         // Only allow if we have a book loaded
@@ -1081,13 +1422,43 @@ impl App {
 
     /// Navigate content (scrolling)
     fn navigate_content(&mut self, action: Action) {
+        // Handle footer-focused state
+        if self.state.content.footer_focused {
+            match action {
+                Action::Up => {
+                    // Exit footer, return to content
+                    self.state.content.exit_footer();
+                    self.state.command_line.clear_message();
+                }
+                Action::Left => {
+                    // Switch to previous button
+                    self.state.content.footer_prev();
+                }
+                Action::Right => {
+                    // Switch to next button
+                    self.state.content.footer_next();
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        // Normal content scrolling
         match action {
             Action::Up => {
                 self.state.content.scroll_offset =
                     self.state.content.scroll_offset.saturating_sub(2);
             }
             Action::Down => {
-                self.state.content.scroll_offset += 2;
+                // Check if we're at max scroll and should enter footer
+                let max_scroll = self.state.content.max_scroll();
+                if self.state.content.scroll_offset >= max_scroll {
+                    // At bottom of content, move focus to footer
+                    self.state.content.enter_footer();
+                    self.state.command_line.set_message("[h/l] switch  [Enter] select  [k] back");
+                } else {
+                    self.state.content.scroll_offset += 2;
+                }
             }
             Action::Top => {
                 self.state.content.scroll_offset = 0;
@@ -1148,6 +1519,22 @@ impl App {
 
     /// Handle selection (Enter key)
     fn handle_select(&mut self) {
+        // Handle Content panel with footer focused
+        if self.state.focused_panel == Panel::Content && self.state.content.footer_focused {
+            match self.state.content.footer_button_index {
+                0 => {
+                    // Take Quiz button
+                    self.start_quiz();
+                }
+                1 => {
+                    // Complete & Next button
+                    self.complete_section_and_next();
+                }
+                _ => {}
+            }
+            return;
+        }
+
         if self.state.focused_panel != Panel::Curriculum {
             return;
         }
@@ -1525,7 +1912,7 @@ impl App {
         }
     }
 
-    /// Ask Claude about selected text
+    /// Ask Claude about selected text (includes full section context)
     fn ask_about_selection(&mut self, question: &str) {
         // Check if already streaming
         if self.state.claude.streaming {
@@ -1539,15 +1926,45 @@ impl App {
             return;
         }
 
-        // Get selected text
-        let selected_text = match self.get_selected_text() {
-            Some(text) if !text.is_empty() => text,
-            _ => {
-                self.state
-                    .command_line
-                    .set_error("No text selected. Use 'v' to enter visual mode and select text.");
-                return;
+        // Get book and section info for context
+        let Some(book) = &self.state.book else {
+            self.state.command_line.set_error("No book loaded");
+            return;
+        };
+
+        let Some(section) =
+            book.get_section(self.state.current_chapter, self.state.current_section)
+        else {
+            self.state.command_line.set_error("No section selected");
+            return;
+        };
+
+        // Get full section content for context
+        let section_content = section.plain_text();
+        let section_title = section.title.clone();
+        let section_path = section.path.clone();
+        let book_id = book.metadata.id.clone();
+
+        // Get selected text and selection info
+        let (selected_text, selection_block, selection_char) = if self.state.visual_mode.active {
+            let (start_block, start_char, _, _) = self.state.visual_mode.selection_range(
+                self.state.content.cursor_block,
+                self.state.content.cursor_char,
+            );
+            match self.get_selected_text() {
+                Some(text) if !text.is_empty() => (text, Some(start_block), Some(start_char)),
+                _ => {
+                    self.state.command_line.set_error(
+                        "No text selected. Use 'v' to enter visual mode and select text.",
+                    );
+                    return;
+                }
             }
+        } else {
+            self.state
+                .command_line
+                .set_error("No text selected. Use 'v' to enter visual mode and select text.");
+            return;
         };
 
         // Get API key
@@ -1559,17 +1976,37 @@ impl App {
             }
         };
 
-        // Truncate selection if too long
-        let selection = if selected_text.len() > 4000 {
-            format!("{}...\n\n[Selection truncated]", &selected_text[..4000])
+        // Truncate section content if too long (but preserve full selection)
+        let context = if section_content.len() > 6000 {
+            format!("{}...\n\n[Section truncated for context]", &section_content[..6000])
+        } else {
+            section_content
+        };
+
+        // Truncate selection display if too long
+        let selection_display = if selected_text.len() > 2000 {
+            format!("{}...", &selected_text[..2000])
         } else {
             selected_text.clone()
         };
 
-        // Build the prompt
+        // Build the prompt with full context and highlighted selection
         let prompt = format!(
-            "Here is a passage from a book:\n\n\"\"\"\n{}\n\"\"\"\n\n{}\n\nProvide a clear, concise answer.",
-            selection, question
+            "Here is a section from the book titled \"{}\":\n\n---\n{}\n---\n\n\
+             The reader has highlighted this specific passage:\n\n\"\"\"\n{}\n\"\"\"\n\n\
+             Their question about this passage: {}\n\n\
+             Please provide a clear, concise answer that considers both the highlighted passage and its surrounding context.",
+            section_title, context, selection_display, question
+        );
+
+        // Store pending note info for saving Q&A after response
+        self.state.claude.set_pending_note(
+            question,
+            &book_id,
+            &section_path,
+            Some(&selected_text),
+            selection_block,
+            selection_char,
         );
 
         // Exit visual mode
@@ -1586,7 +2023,7 @@ impl App {
         let client = crate::claude::ClaudeClient::new(api_key);
         let messages = vec![crate::claude::Message::user(&prompt)];
         let request = crate::claude::CreateMessageRequest::new(self.state.claude.model, messages)
-            .with_system("You are an expert tutor helping someone understand content from a book. Answer questions about the selected passage clearly and concisely.");
+            .with_system("You are an expert tutor helping someone understand content from a book. Answer questions about the selected passage clearly and concisely, using the surrounding context to provide more complete explanations when relevant.");
 
         // Create channel and cancellation token
         let (tx, rx) = tokio::sync::mpsc::channel(100);
@@ -1827,6 +2264,26 @@ impl App {
         }
     }
 
+    /// Process pending quiz generation results (non-blocking)
+    fn process_quiz_events(&mut self) {
+        // Check for quiz generation result
+        if let Some(ref mut rx) = self.quiz_rx {
+            if let Ok(result) = rx.try_recv() {
+                match result {
+                    QuizGenerationResult::Success(questions) => {
+                        self.state.quiz.set_questions(questions);
+                        self.state.command_line.set_message("Quiz ready! Use j/k to select, Enter to confirm.");
+                    }
+                    QuizGenerationResult::Error(message) => {
+                        self.state.quiz.set_error(&message);
+                        self.state.command_line.set_error(format!("Quiz error: {}", message));
+                    }
+                }
+                self.quiz_rx = None;
+            }
+        }
+    }
+
     /// Handle a single Claude streaming event
     fn handle_claude_event(&mut self, event: crate::claude::StreamEvent) {
         use crate::claude::StreamEvent;
@@ -1838,6 +2295,12 @@ impl App {
             StreamEvent::MessageStop => {
                 // Response complete - finalize and show the response panel
                 self.state.claude.finalize_response();
+
+                // Create note from Q&A if pending info exists
+                if self.state.claude.has_pending_note() {
+                    self.save_claude_qa_as_note();
+                }
+
                 self.state
                     .command_line
                     .set_message("Response ready (press 'c' to toggle, Esc to close)");
@@ -1847,6 +2310,7 @@ impl App {
             StreamEvent::Error { message } => {
                 self.state.claude.set_error(&message);
                 self.state.claude.streaming = false;
+                self.state.claude.clear_pending_note(); // Clear pending on error
                 self.claude_rx = None;
                 self.claude_cancel = None;
             }
@@ -1858,6 +2322,54 @@ impl App {
                 // Ignore other events (Ping, ContentBlockStart/Stop, MessageDelta)
             }
         }
+    }
+
+    /// Save the completed Claude Q&A as a note
+    fn save_claude_qa_as_note(&mut self) {
+        use crate::notes::Note;
+
+        // Extract pending note info
+        let question = match &self.state.claude.pending_question {
+            Some(q) => q.clone(),
+            None => return,
+        };
+        let book_id = match &self.state.claude.pending_book_id {
+            Some(id) => id.clone(),
+            None => return,
+        };
+        let section_path = match &self.state.claude.pending_section_path {
+            Some(path) => path.clone(),
+            None => return,
+        };
+        let answer = self.state.claude.response.clone();
+
+        // Get optional selection info
+        let selected_text = self.state.claude.pending_selection.clone();
+        let selection_block = self.state.claude.pending_selection_block;
+        let selection_char = self.state.claude.pending_selection_char;
+
+        // Create the note
+        let note = Note::new_claude_note(
+            &book_id,
+            &section_path,
+            &question,
+            &answer,
+            selection_block,
+            selection_char,
+            selected_text.as_deref(),
+        );
+
+        // Add to store and save
+        self.notes_store.add_note(note);
+        if let Err(e) = self.notes_store.save() {
+            tracing::warn!("Failed to save Claude Q&A note: {}", e);
+        }
+
+        // Clear pending note info
+        self.state.claude.clear_pending_note();
+
+        // Show notes panel so user can see the saved Q&A
+        self.state.panel_visibility.notes = true;
     }
 
     /// Cancel the current Claude streaming request

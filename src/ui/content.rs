@@ -15,6 +15,7 @@ use crate::syntax;
 use crate::theme::Theme;
 
 use super::image::ImageCache;
+use super::section_footer;
 
 /// Draw the content panel with section content
 pub fn draw(frame: &mut Frame, area: Rect, state: &mut AppState, theme: &Theme, focused: bool) {
@@ -212,7 +213,7 @@ pub fn draw_with_images(
     }
 
     // Render content blocks with note underlining and selection highlighting
-    let (lines, block_offsets) = render_content_blocks_with_offsets(
+    let (mut lines, block_offsets) = render_content_blocks_with_offsets(
         &section.content,
         theme,
         content_width,
@@ -221,7 +222,15 @@ pub fn draw_with_images(
         cursor_state.as_ref(),
         &image_heights,
     );
-    let total_lines = lines.len();
+
+    // Add blank lines before footer for spacing
+    let footer_start_line = lines.len();
+    lines.push(Line::from(""));
+    lines.push(Line::from(""));
+
+    // Add footer height to total lines (footer renders separately but affects scroll)
+    let footer_height = section_footer::FOOTER_HEIGHT as usize;
+    let total_lines = lines.len() + footer_height;
     let visible_height = inner.height as usize;
 
     // Update state with content metrics for scroll clamping
@@ -293,6 +302,36 @@ pub fn draw_with_images(
                     }
                 }
             }
+        }
+    }
+
+    // Render section footer if visible
+    // Footer starts after all content lines (including spacing)
+    let footer_line_start = footer_start_line + 2; // After the two blank lines
+    let footer_line_end = footer_line_start + footer_height;
+    let viewport_end = scroll_offset + visible_height;
+
+    // Check if footer is visible in viewport
+    if footer_line_end > scroll_offset && footer_line_start < viewport_end {
+        // Calculate footer position within viewport
+        let footer_y = if footer_line_start >= scroll_offset {
+            // Footer starts within viewport
+            inner.y + (footer_line_start - scroll_offset) as u16
+        } else {
+            // Footer starts above viewport (clipped at top)
+            inner.y
+        };
+
+        // Calculate available height for footer
+        let available_height = inner.height.saturating_sub(footer_y - inner.y);
+        if available_height >= section_footer::FOOTER_HEIGHT {
+            let footer_area = Rect {
+                x: inner.x,
+                y: footer_y,
+                width: content_area.width,
+                height: section_footer::FOOTER_HEIGHT,
+            };
+            section_footer::draw(frame, footer_area, state, theme);
         }
     }
 

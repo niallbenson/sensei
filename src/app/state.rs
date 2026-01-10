@@ -122,6 +122,10 @@ pub struct ContentState {
     pub cursor_blink_frame: usize,
     /// Starting line number for each content block (computed during render)
     pub block_line_offsets: Vec<usize>,
+    /// Whether the section footer buttons are focused
+    pub footer_focused: bool,
+    /// Which footer button is selected (0 = Quiz, 1 = Next)
+    pub footer_button_index: usize,
 }
 
 impl ContentState {
@@ -409,6 +413,31 @@ impl ContentState {
         // Blink every ~500ms at 60fps = every 30 frames
         (self.cursor_blink_frame / 15) % 2 == 0
     }
+
+    /// Enter footer focus mode
+    pub fn enter_footer(&mut self) {
+        self.footer_focused = true;
+        self.footer_button_index = 0; // Start on Quiz button
+    }
+
+    /// Exit footer focus mode
+    pub fn exit_footer(&mut self) {
+        self.footer_focused = false;
+    }
+
+    /// Move to previous footer button
+    pub fn footer_prev(&mut self) {
+        if self.footer_button_index > 0 {
+            self.footer_button_index -= 1;
+        }
+    }
+
+    /// Move to next footer button
+    pub fn footer_next(&mut self) {
+        if self.footer_button_index < 1 {
+            self.footer_button_index += 1;
+        }
+    }
 }
 
 /// State for search mode
@@ -418,6 +447,132 @@ pub struct SearchState {
     pub active: bool,
     /// Current search query
     pub query: String,
+}
+
+/// A single quiz question
+#[derive(Debug, Clone, Default)]
+pub struct QuizQuestion {
+    /// The question text
+    pub question: String,
+    /// Answer options (typically 4)
+    pub options: Vec<String>,
+    /// Index of the correct answer (0-3)
+    pub correct_index: usize,
+}
+
+/// State for section quiz
+#[derive(Debug, Clone, Default)]
+pub struct QuizState {
+    /// Whether quiz overlay is visible
+    pub active: bool,
+    /// Generated questions
+    pub questions: Vec<QuizQuestion>,
+    /// Current question index (0-4)
+    pub current_question: usize,
+    /// User's answers (None = not answered yet)
+    pub answers: Vec<Option<usize>>,
+    /// Currently selected answer option (0-3)
+    pub selected_option: usize,
+    /// Quiz completed (showing results)
+    pub completed: bool,
+    /// Loading state (waiting for Claude to generate questions)
+    pub loading: bool,
+    /// Error message if generation failed
+    pub error: Option<String>,
+    /// Section path this quiz is for
+    pub section_path: Option<String>,
+}
+
+impl QuizState {
+    /// Reset quiz state for a new quiz
+    pub fn start_loading(&mut self, section_path: &str) {
+        self.active = true;
+        self.loading = true;
+        self.completed = false;
+        self.questions.clear();
+        self.answers.clear();
+        self.current_question = 0;
+        self.selected_option = 0;
+        self.error = None;
+        self.section_path = Some(section_path.to_string());
+    }
+
+    /// Set questions after Claude generates them
+    pub fn set_questions(&mut self, questions: Vec<QuizQuestion>) {
+        self.questions = questions;
+        self.answers = vec![None; self.questions.len()];
+        self.loading = false;
+        self.current_question = 0;
+        self.selected_option = 0;
+    }
+
+    /// Set error state
+    pub fn set_error(&mut self, message: &str) {
+        self.error = Some(message.to_string());
+        self.loading = false;
+    }
+
+    /// Select previous answer option
+    pub fn select_prev(&mut self) {
+        if self.selected_option > 0 {
+            self.selected_option -= 1;
+        }
+    }
+
+    /// Select next answer option
+    pub fn select_next(&mut self) {
+        let max_options = self.questions.get(self.current_question).map(|q| q.options.len()).unwrap_or(4);
+        if self.selected_option + 1 < max_options {
+            self.selected_option += 1;
+        }
+    }
+
+    /// Confirm current answer and move to next question
+    pub fn confirm_answer(&mut self) {
+        if self.current_question < self.questions.len() {
+            self.answers[self.current_question] = Some(self.selected_option);
+
+            if self.current_question + 1 < self.questions.len() {
+                self.current_question += 1;
+                self.selected_option = 0;
+            } else {
+                self.completed = true;
+            }
+        }
+    }
+
+    /// Calculate score (number correct)
+    pub fn score(&self) -> (usize, usize) {
+        let correct = self.questions.iter().enumerate()
+            .filter(|(i, q)| self.answers.get(*i).copied().flatten() == Some(q.correct_index))
+            .count();
+        (correct, self.questions.len())
+    }
+
+    /// Check if quiz was passed (100% required)
+    pub fn passed(&self) -> bool {
+        let (correct, total) = self.score();
+        total > 0 && correct == total
+    }
+
+    /// Reset for retry
+    pub fn retry(&mut self) {
+        self.answers = vec![None; self.questions.len()];
+        self.current_question = 0;
+        self.selected_option = 0;
+        self.completed = false;
+    }
+
+    /// Close the quiz
+    pub fn close(&mut self) {
+        self.active = false;
+        self.loading = false;
+        self.completed = false;
+        self.questions.clear();
+        self.answers.clear();
+        self.error = None;
+        self.section_path = None;
+    }
 }
 
 /// Command line mode
@@ -889,6 +1044,18 @@ pub struct ClaudeState {
     pub setup_step: SetupStep,
     /// Temporary API key during setup (before validation)
     pub setup_api_key: String,
+    /// Pending note info: question asked
+    pub pending_question: Option<String>,
+    /// Pending note info: book ID
+    pub pending_book_id: Option<String>,
+    /// Pending note info: section path
+    pub pending_section_path: Option<String>,
+    /// Pending note info: selected text (for anchor)
+    pub pending_selection: Option<String>,
+    /// Pending note info: selection block index
+    pub pending_selection_block: Option<usize>,
+    /// Pending note info: selection start char
+    pub pending_selection_char: Option<usize>,
 }
 
 impl ClaudeState {
@@ -983,6 +1150,39 @@ impl ClaudeState {
     pub fn is_response_visible(&self) -> bool {
         self.show_response && !self.response.is_empty()
     }
+
+    /// Set pending note info for saving Q&A as a note
+    pub fn set_pending_note(
+        &mut self,
+        question: &str,
+        book_id: &str,
+        section_path: &str,
+        selection: Option<&str>,
+        selection_block: Option<usize>,
+        selection_char: Option<usize>,
+    ) {
+        self.pending_question = Some(question.to_string());
+        self.pending_book_id = Some(book_id.to_string());
+        self.pending_section_path = Some(section_path.to_string());
+        self.pending_selection = selection.map(|s| s.to_string());
+        self.pending_selection_block = selection_block;
+        self.pending_selection_char = selection_char;
+    }
+
+    /// Clear pending note info
+    pub fn clear_pending_note(&mut self) {
+        self.pending_question = None;
+        self.pending_book_id = None;
+        self.pending_section_path = None;
+        self.pending_selection = None;
+        self.pending_selection_block = None;
+        self.pending_selection_char = None;
+    }
+
+    /// Check if there's pending note info
+    pub fn has_pending_note(&self) -> bool {
+        self.pending_question.is_some() && self.pending_book_id.is_some()
+    }
 }
 
 /// Full application state
@@ -1029,6 +1229,9 @@ pub struct AppState {
 
     /// Claude AI integration state
     pub claude: ClaudeState,
+
+    /// Quiz state
+    pub quiz: QuizState,
 }
 
 #[cfg(test)]
