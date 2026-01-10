@@ -73,8 +73,9 @@ impl std::str::FromStr for ClaudeModel {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Self::parse(s)
-            .ok_or_else(|| format!("Unknown model: {}. Options: haiku, haiku3, sonnet4, sonnet, opus", s))
+        Self::parse(s).ok_or_else(|| {
+            format!("Unknown model: {}. Options: haiku, haiku3, sonnet4, sonnet, opus", s)
+        })
     }
 }
 

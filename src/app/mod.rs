@@ -1036,14 +1036,15 @@ Respond with ONLY the JSON object, no other text."#,
     );
 
     let messages = vec![Message::user(prompt)];
-    let request = CreateMessageRequest::new(model, messages)
-        .with_max_tokens(2000)
-        .without_streaming();
+    let request =
+        CreateMessageRequest::new(model, messages).with_max_tokens(2000).without_streaming();
 
     match client.send_message(request).await {
         Ok(response) => {
             // Extract text from response content blocks
-            let text = response.content.iter()
+            let text = response
+                .content
+                .iter()
                 .filter_map(|block| block.text.as_deref())
                 .collect::<Vec<_>>()
                 .join("");
@@ -1064,15 +1065,9 @@ fn parse_quiz_json(text: &str) -> Result<Vec<crate::app::state::QuizQuestion>> {
 
     // Try to extract JSON from the response (Claude might add markdown code blocks)
     let json_str = if text.contains("```json") {
-        text.split("```json").nth(1)
-            .and_then(|s| s.split("```").next())
-            .unwrap_or(text)
-            .trim()
+        text.split("```json").nth(1).and_then(|s| s.split("```").next()).unwrap_or(text).trim()
     } else if text.contains("```") {
-        text.split("```").nth(1)
-            .and_then(|s| s.split("```").next())
-            .unwrap_or(text)
-            .trim()
+        text.split("```").nth(1).and_then(|s| s.split("```").next()).unwrap_or(text).trim()
     } else {
         text.trim()
     };
@@ -1096,19 +1091,20 @@ fn parse_quiz_json(text: &str) -> Result<Vec<crate::app::state::QuizQuestion>> {
         return Err(anyhow::anyhow!("Expected 5 questions, got {}", response.questions.len()));
     }
 
-    let questions: Vec<QuizQuestion> = response.questions.into_iter().map(|q| {
-        QuizQuestion {
+    let questions: Vec<QuizQuestion> = response
+        .questions
+        .into_iter()
+        .map(|q| QuizQuestion {
             question: q.question,
             options: q.options,
             correct_index: q.correct_index,
-        }
-    }).collect();
+        })
+        .collect();
 
     Ok(questions)
 }
 
 impl App {
-
     /// Handle actions when quiz overlay is active
     fn handle_quiz_action(&mut self, action: Action) -> Result<bool> {
         match action {
@@ -1947,10 +1943,10 @@ impl App {
 
         // Get selected text and selection info
         let (selected_text, selection_block, selection_char) = if self.state.visual_mode.active {
-            let (start_block, start_char, _, _) = self.state.visual_mode.selection_range(
-                self.state.content.cursor_block,
-                self.state.content.cursor_char,
-            );
+            let (start_block, start_char, _, _) = self
+                .state
+                .visual_mode
+                .selection_range(self.state.content.cursor_block, self.state.content.cursor_char);
             match self.get_selected_text() {
                 Some(text) if !text.is_empty() => (text, Some(start_block), Some(start_char)),
                 _ => {
@@ -2272,7 +2268,9 @@ impl App {
                 match result {
                     QuizGenerationResult::Success(questions) => {
                         self.state.quiz.set_questions(questions);
-                        self.state.command_line.set_message("Quiz ready! Use j/k to select, Enter to confirm.");
+                        self.state
+                            .command_line
+                            .set_message("Quiz ready! Use j/k to select, Enter to confirm.");
                     }
                     QuizGenerationResult::Error(message) => {
                         self.state.quiz.set_error(&message);

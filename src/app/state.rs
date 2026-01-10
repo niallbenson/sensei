@@ -521,7 +521,8 @@ impl QuizState {
 
     /// Select next answer option
     pub fn select_next(&mut self) {
-        let max_options = self.questions.get(self.current_question).map(|q| q.options.len()).unwrap_or(4);
+        let max_options =
+            self.questions.get(self.current_question).map(|q| q.options.len()).unwrap_or(4);
         if self.selected_option + 1 < max_options {
             self.selected_option += 1;
         }
@@ -543,7 +544,10 @@ impl QuizState {
 
     /// Calculate score (number correct)
     pub fn score(&self) -> (usize, usize) {
-        let correct = self.questions.iter().enumerate()
+        let correct = self
+            .questions
+            .iter()
+            .enumerate()
             .filter(|(i, q)| self.answers.get(*i).copied().flatten() == Some(q.correct_index))
             .count();
         (correct, self.questions.len())

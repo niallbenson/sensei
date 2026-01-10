@@ -72,8 +72,7 @@ fn draw_loading(frame: &mut Frame, area: Rect, theme: &Theme) {
         )),
     ];
 
-    let para = Paragraph::new(text)
-        .alignment(ratatui::layout::Alignment::Center);
+    let para = Paragraph::new(text).alignment(ratatui::layout::Alignment::Center);
     frame.render_widget(para, area);
 }
 
@@ -163,8 +162,7 @@ fn draw_results(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) 
         )));
     }
 
-    let para = Paragraph::new(lines)
-        .alignment(ratatui::layout::Alignment::Center);
+    let para = Paragraph::new(lines).alignment(ratatui::layout::Alignment::Center);
     frame.render_widget(para, area);
 }
 
@@ -206,10 +204,7 @@ fn draw_question(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme)
             Style::default().fg(theme.fg_secondary)
         };
 
-        lines.push(Line::from(Span::styled(
-            format!("  {} {}) {}", prefix, letter, option),
-            style,
-        )));
+        lines.push(Line::from(Span::styled(format!("  {} {}) {}", prefix, letter, option), style)));
         lines.push(Line::from(""));
     }
 

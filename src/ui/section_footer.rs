@@ -24,14 +24,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     let selected_button = state.content.footer_button_index;
 
     // Create button text with styling
-    let quiz_button = create_button(
-        " Take Quiz ",
-        footer_focused && selected_button == 0,
-        theme,
-    );
+    let quiz_button = create_button(" Take Quiz ", footer_focused && selected_button == 0, theme);
 
     let next_button = create_button(
-        " Complete & Next \u{2192} ",  // → arrow
+        " Complete & Next \u{2192} ", // → arrow
         footer_focused && selected_button == 1,
         theme,
     );
@@ -53,10 +49,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
         "\u{2500}".repeat(area.width as usize), // ─ horizontal line
         Style::default().fg(theme.border),
     )]);
-    frame.render_widget(
-        Paragraph::new(separator),
-        Rect::new(area.x, area.y, area.width, 1),
-    );
+    frame.render_widget(Paragraph::new(separator), Rect::new(area.x, area.y, area.width, 1));
 
     // Position for buttons (centered vertically in remaining space)
     let button_y = area.y + 1;
@@ -66,7 +59,8 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     frame.render_widget(Paragraph::new(quiz_button), quiz_area);
 
     // Draw next button
-    let next_area = Rect::new(start_x + quiz_width as u16 + gap as u16, button_y, next_width as u16, 1);
+    let next_area =
+        Rect::new(start_x + quiz_width as u16 + gap as u16, button_y, next_width as u16, 1);
     frame.render_widget(Paragraph::new(next_button), next_area);
 
     // Draw hint line
@@ -82,7 +76,10 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
     } else {
         Line::from(vec![
             Span::styled("[j]", Style::default().fg(theme.fg_muted)),
-            Span::styled(" at end of content to access buttons", Style::default().fg(theme.fg_secondary)),
+            Span::styled(
+                " at end of content to access buttons",
+                Style::default().fg(theme.fg_secondary),
+            ),
         ])
     };
 
@@ -94,14 +91,9 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme) {
 /// Create a styled button
 fn create_button<'a>(text: &'a str, focused: bool, theme: &Theme) -> Line<'a> {
     let style = if focused {
-        Style::default()
-            .fg(theme.bg_primary)
-            .bg(theme.accent_primary)
-            .add_modifier(Modifier::BOLD)
+        Style::default().fg(theme.bg_primary).bg(theme.accent_primary).add_modifier(Modifier::BOLD)
     } else {
-        Style::default()
-            .fg(theme.fg_secondary)
-            .bg(theme.bg_tertiary)
+        Style::default().fg(theme.fg_secondary).bg(theme.bg_tertiary)
     };
 
     Line::from(vec![Span::styled(text, style)])
