@@ -728,4 +728,97 @@ mod tests {
         let screen = Screen::default();
         assert!(matches!(screen, Screen::Landing));
     }
+
+    #[test]
+    fn panel_resize_curriculum_increase() {
+        let mut vis = PanelVisibility::default();
+        vis.curriculum_width_percent = 20;
+        vis.increase_curriculum_width();
+        assert_eq!(vis.curriculum_width_percent, 25); // Step size is 5
+    }
+
+    #[test]
+    fn panel_resize_curriculum_decrease() {
+        let mut vis = PanelVisibility::default();
+        vis.curriculum_width_percent = 20;
+        vis.decrease_curriculum_width();
+        assert_eq!(vis.curriculum_width_percent, 15); // Step size is 5
+    }
+
+    #[test]
+    fn panel_resize_curriculum_caps_at_max() {
+        let mut vis = PanelVisibility::default();
+        vis.curriculum_width_percent = 49;
+        vis.increase_curriculum_width();
+        assert_eq!(vis.curriculum_width_percent, 50); // Should cap at 50
+        vis.increase_curriculum_width();
+        assert_eq!(vis.curriculum_width_percent, 50); // Should not exceed 50
+    }
+
+    #[test]
+    fn panel_resize_curriculum_floors_at_min() {
+        let mut vis = PanelVisibility::default();
+        vis.curriculum_width_percent = 11;
+        vis.decrease_curriculum_width();
+        assert_eq!(vis.curriculum_width_percent, 10); // Should floor at 10
+        vis.decrease_curriculum_width();
+        assert_eq!(vis.curriculum_width_percent, 10); // Should not go below 10
+    }
+
+    #[test]
+    fn panel_resize_notes_increase() {
+        let mut vis = PanelVisibility::default();
+        vis.notes_width_percent = 20;
+        vis.increase_notes_width();
+        assert_eq!(vis.notes_width_percent, 25); // Step size is 5
+    }
+
+    #[test]
+    fn panel_resize_notes_caps_at_max() {
+        let mut vis = PanelVisibility::default();
+        vis.notes_width_percent = 49;
+        vis.increase_notes_width();
+        assert_eq!(vis.notes_width_percent, 50);
+        vis.increase_notes_width();
+        assert_eq!(vis.notes_width_percent, 50);
+    }
+
+    #[test]
+    fn panel_resize_notes_floors_at_min() {
+        let mut vis = PanelVisibility::default();
+        vis.notes_width_percent = 11;
+        vis.decrease_notes_width();
+        assert_eq!(vis.notes_width_percent, 10);
+        vis.decrease_notes_width();
+        assert_eq!(vis.notes_width_percent, 10);
+    }
+
+    #[test]
+    fn content_state_max_scroll() {
+        let mut state = ContentState::default();
+        state.total_lines = 100;
+        state.visible_height = 20;
+        // max_scroll = total_lines - visible_height/2 = 100 - 10 = 90
+        assert_eq!(state.max_scroll(), 90);
+    }
+
+    #[test]
+    fn content_state_clamp_scroll() {
+        let mut state = ContentState::default();
+        state.total_lines = 100;
+        state.visible_height = 20;
+        state.scroll_offset = 200; // Way beyond max
+        state.clamp_scroll();
+        assert_eq!(state.scroll_offset, 90); // Should clamp to max_scroll
+    }
+
+    #[test]
+    fn content_state_clamp_scroll_zero_lines() {
+        let mut state = ContentState::default();
+        state.total_lines = 0;
+        state.visible_height = 20;
+        state.scroll_offset = 10;
+        state.clamp_scroll();
+        assert_eq!(state.scroll_offset, 0);
+    }
 }

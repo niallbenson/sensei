@@ -6,11 +6,17 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use once_cell::sync::Lazy;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use regex::Regex;
 
 use super::model::{
     Alignment, Book, BookMetadata, BookSource, Chapter, CodeBlock, ContentBlock, Section, Table,
 };
+
+/// Regex for matching mdBook include directives (compiled once)
+static INCLUDE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\{\{#(include|rustdoc_include)\s+([^}]+)\}\}").unwrap());
 
 /// Parse a markdown string into content blocks
 // skipcq: RS-R1000 - Parser functions inherently have high cyclomatic complexity
@@ -370,17 +376,12 @@ pub fn parse_markdown_file(path: &Path, section_number: usize) -> Result<Section
 /// Preprocess mdBook include directives
 /// Handles: {{#include path}}, {{#rustdoc_include path}}, with optional anchors
 fn preprocess_mdbook_includes(content: &str, base_dir: &Path) -> String {
-    use regex::Regex;
-
-    // Match {{#include path}} and {{#rustdoc_include path}} patterns
-    let include_re = Regex::new(r"\{\{#(include|rustdoc_include)\s+([^}]+)\}\}").unwrap();
-
     let mut result = content.to_string();
 
     // Process all includes (may need multiple passes for nested includes)
     for _ in 0..5 {
         // Limit recursion depth
-        let new_result = include_re
+        let new_result = INCLUDE_RE
             .replace_all(&result, |caps: &regex::Captures| {
                 let include_type = caps.get(1).map(|m| m.as_str()).unwrap_or("include");
                 let path_spec = caps.get(2).map(|m| m.as_str().trim()).unwrap_or("");
@@ -409,11 +410,28 @@ fn resolve_include(base_dir: &Path, path_spec: &str, is_rustdoc: bool) -> String
 
     let full_path = base_dir.join(file_path);
 
+    // Path traversal protection: ensure resolved path stays within book directory
+    // Canonicalize both paths to resolve .. and symlinks
+    let canonical_full = match full_path.canonicalize() {
+        Ok(p) => p,
+        Err(_) => {
+            return format!("// File not found: {}", file_path);
+        }
+    };
+
+    // Get the book root (parent of src directory, or base_dir itself)
+    let book_root = base_dir.ancestors().find(|p| p.join("book.toml").exists()).unwrap_or(base_dir);
+
+    if let Ok(canonical_root) = book_root.canonicalize() {
+        if !canonical_full.starts_with(&canonical_root) {
+            return format!("// Path traversal blocked: {}", file_path);
+        }
+    }
+
     // Try to read the file
-    let file_content = match fs::read_to_string(&full_path) {
+    let file_content = match fs::read_to_string(&canonical_full) {
         Ok(content) => content,
         Err(_) => {
-            // File not found - return a placeholder with the original directive
             return format!("// File not found: {}", file_path);
         }
     };
@@ -442,7 +460,8 @@ fn extract_anchored_content(content: &str, anchor: &str, is_rustdoc: bool) -> St
         // Try to parse as numbers first
         if let (Ok(start), Ok(end)) = (start_part.parse::<usize>(), end_part.parse::<usize>()) {
             let start = start.saturating_sub(1); // Convert to 0-indexed
-            let extracted: Vec<&str> = lines.into_iter().skip(start).take(end - start).collect();
+            let count = end.saturating_sub(start); // Prevent underflow if end < start
+            let extracted: Vec<&str> = lines.into_iter().skip(start).take(count).collect();
             let result = extracted.join("\n");
             return if is_rustdoc { filter_rustdoc_hidden(&result) } else { result };
         }
@@ -1080,5 +1099,72 @@ More text after comment."#;
         } else {
             panic!("Expected paragraph");
         }
+    }
+
+    #[test]
+    fn filter_rustdoc_hidden_lines() {
+        let content = "fn main() {\n# hidden line\n    println!(\"visible\");\n#\n}";
+        let result = super::filter_rustdoc_hidden(content);
+        assert!(!result.contains("hidden line"));
+        assert!(result.contains("println!"));
+        assert!(result.contains("fn main()"));
+    }
+
+    #[test]
+    fn filter_rustdoc_preserves_hash_in_strings() {
+        // Hash in middle of line should be preserved
+        let content = "let s = \"# not hidden\";";
+        let result = super::filter_rustdoc_hidden(content);
+        assert!(result.contains("# not hidden"));
+    }
+
+    #[test]
+    fn extract_anchored_content_line_range() {
+        let content = "line1\nline2\nline3\nline4\nline5";
+        // Extract lines 2-4 (1-indexed in mdBook, start is adjusted to 0-indexed)
+        // start=2 becomes 1 (0-indexed), count=4-1=3, so lines at index 1,2,3 = line2,line3,line4
+        let result = super::extract_anchored_content(content, "2:4", false);
+        assert!(result.contains("line2"));
+        assert!(result.contains("line3"));
+        assert!(result.contains("line4"));
+        assert!(!result.contains("line1"));
+        assert!(!result.contains("line5"));
+    }
+
+    #[test]
+    fn extract_anchored_content_invalid_range() {
+        // When start > end, should not panic (use saturating_sub)
+        let content = "line1\nline2\nline3";
+        let result = super::extract_anchored_content(content, "5:2", false);
+        // Should return empty or handle gracefully, not panic
+        assert!(result.is_empty() || !result.contains("panic"));
+    }
+
+    #[test]
+    fn extract_anchored_content_with_anchor_markers() {
+        let content = r#"before
+// ANCHOR: example
+fn example() {}
+// ANCHOR_END: example
+after"#;
+        let result = super::extract_anchored_content(content, "example", false);
+        assert!(result.contains("fn example()"));
+        assert!(!result.contains("before"));
+        assert!(!result.contains("after"));
+        assert!(!result.contains("ANCHOR"));
+    }
+
+    #[test]
+    fn extract_anchored_content_all() {
+        let content = "line1\nline2\nline3";
+        let result = super::extract_anchored_content(content, "all", false);
+        assert_eq!(result, content);
+    }
+
+    #[test]
+    fn include_regex_matches_include() {
+        assert!(super::INCLUDE_RE.is_match("{{#include ../file.rs}}"));
+        assert!(super::INCLUDE_RE.is_match("{{#rustdoc_include ../file.rs:anchor}}"));
+        assert!(!super::INCLUDE_RE.is_match("{{#unknown ../file.rs}}"));
     }
 }
