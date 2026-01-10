@@ -871,6 +871,12 @@ pub struct ClaudeState {
     pub streaming: bool,
     /// Accumulated text from streaming response
     pub stream_buffer: String,
+    /// Completed response for display
+    pub response: String,
+    /// Whether to show the response panel
+    pub show_response: bool,
+    /// Scroll position in response panel
+    pub response_scroll: u16,
     /// Error message from last operation (if any)
     pub error: Option<String>,
     /// Selected model (Haiku or Sonnet)
@@ -943,6 +949,39 @@ impl ClaudeState {
     pub fn clear_streaming(&mut self) {
         self.streaming = false;
         self.stream_buffer.clear();
+    }
+
+    /// Finalize the response (called when streaming completes)
+    pub fn finalize_response(&mut self) {
+        self.response = std::mem::take(&mut self.stream_buffer);
+        self.streaming = false;
+        self.show_response = true;
+        self.response_scroll = 0;
+    }
+
+    /// Toggle response panel visibility
+    pub fn toggle_response(&mut self) {
+        self.show_response = !self.show_response;
+    }
+
+    /// Hide response panel
+    pub fn hide_response(&mut self) {
+        self.show_response = false;
+    }
+
+    /// Scroll response up
+    pub fn scroll_response_up(&mut self, amount: u16) {
+        self.response_scroll = self.response_scroll.saturating_sub(amount);
+    }
+
+    /// Scroll response down
+    pub fn scroll_response_down(&mut self, amount: u16, max_scroll: u16) {
+        self.response_scroll = self.response_scroll.saturating_add(amount).min(max_scroll);
+    }
+
+    /// Check if response panel is visible
+    pub fn is_response_visible(&self) -> bool {
+        self.show_response && !self.response.is_empty()
     }
 }
 

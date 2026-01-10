@@ -1,5 +1,6 @@
 //! UI rendering components
 
+pub mod claude_panel;
 pub mod command_line;
 pub mod content;
 pub mod curriculum;

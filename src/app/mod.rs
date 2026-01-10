@@ -222,8 +222,11 @@ impl App {
                             continue;
                         }
 
+                        // Route to Claude panel if it's visible
+                        if self.state.claude.is_response_visible() {
+                            self.handle_claude_panel_input(key_event.code);
                         // Route to notes input if editing a note
-                        if self.state.notes.is_editing() {
+                        } else if self.state.notes.is_editing() {
                             self.handle_notes_input(key_event.code);
                         // Route to command line if in input mode
                         } else if self.state.command_line.is_input_mode() {
@@ -268,13 +271,19 @@ impl App {
                                 }
                             }
                         } else {
-                            // Handle : and / to enter command modes
+                            // Handle : and / to enter command modes, 'c' for Claude panel
                             match key_event.code {
                                 KeyCode::Char(':') => {
                                     self.state.command_line.enter_command_mode();
                                 }
                                 KeyCode::Char('/') => {
                                     self.state.command_line.enter_search_mode();
+                                }
+                                KeyCode::Char('c') => {
+                                    // Toggle Claude response panel if there's a response
+                                    if !self.state.claude.response.is_empty() {
+                                        self.state.claude.toggle_response();
+                                    }
                                 }
                                 _ => {}
                             }
@@ -1694,21 +1703,11 @@ impl App {
                 self.state.claude.stream_buffer.push_str(&text);
             }
             StreamEvent::MessageStop => {
-                // Response complete
-                self.state.claude.streaming = false;
-                // Display the response (truncated for status bar)
-                let response = &self.state.claude.stream_buffer;
-                if response.is_empty() {
-                    self.state.command_line.set_message("Claude: (no response)");
-                } else {
-                    // Truncate long responses for the status bar display
-                    let display = if response.len() > 200 {
-                        format!("Claude: {}...", &response[..200])
-                    } else {
-                        format!("Claude: {}", response)
-                    };
-                    self.state.command_line.set_message(display);
-                }
+                // Response complete - finalize and show the response panel
+                self.state.claude.finalize_response();
+                self.state
+                    .command_line
+                    .set_message("Response ready (press 'c' to toggle, Esc to close)");
                 self.claude_rx = None;
                 self.claude_cancel = None;
             }
@@ -1737,6 +1736,37 @@ impl App {
         self.state.claude.stream_buffer.clear();
         self.state.command_line.set_message("Request cancelled");
         self.claude_rx = None;
+    }
+
+    /// Handle input when Claude response panel is visible
+    fn handle_claude_panel_input(&mut self, key: KeyCode) {
+        match key {
+            KeyCode::Esc | KeyCode::Char('q') => {
+                self.state.claude.hide_response();
+            }
+            KeyCode::Char('c') => {
+                self.state.claude.toggle_response();
+            }
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.state.claude.scroll_response_down(1, 1000);
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.state.claude.scroll_response_up(1);
+            }
+            KeyCode::Char('d') | KeyCode::PageDown => {
+                self.state.claude.scroll_response_down(10, 1000);
+            }
+            KeyCode::Char('u') | KeyCode::PageUp => {
+                self.state.claude.scroll_response_up(10);
+            }
+            KeyCode::Char('g') | KeyCode::Home => {
+                self.state.claude.response_scroll = 0;
+            }
+            KeyCode::Char('G') | KeyCode::End => {
+                self.state.claude.scroll_response_down(10000, 10000);
+            }
+            _ => {}
+        }
     }
 
     /// Start Claude setup wizard
