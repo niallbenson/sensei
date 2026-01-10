@@ -226,6 +226,10 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
                     current_list_item.push('`');
                     current_list_item.push_str(&code);
                     current_list_item.push('`');
+                } else if in_blockquote {
+                    blockquote_content.push('`');
+                    blockquote_content.push_str(&code);
+                    blockquote_content.push('`');
                 } else {
                     current_text.push('`');
                     current_text.push_str(&code);
@@ -1166,5 +1170,37 @@ after"#;
         assert!(super::INCLUDE_RE.is_match("{{#include ../file.rs}}"));
         assert!(super::INCLUDE_RE.is_match("{{#rustdoc_include ../file.rs:anchor}}"));
         assert!(!super::INCLUDE_RE.is_match("{{#unknown ../file.rs}}"));
+    }
+
+    #[test]
+    fn blockquote_with_inline_code() {
+        let md =
+            "> Note: If you prefer not to use `rustup` for some reason, see the Other options.";
+        let blocks = parse_markdown_content(md);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::Blockquote(text) = &blocks[0] {
+            // Inline code should be in the blockquote, not separated
+            assert!(text.contains("`rustup`"), "Expected `rustup` in blockquote, got: {}", text);
+            assert!(text.contains("use `rustup` for"), "Text should flow around inline code");
+        } else {
+            panic!("Expected blockquote, got {:?}", blocks[0]);
+        }
+    }
+
+    #[test]
+    fn blockquote_with_multiple_inline_codes() {
+        let md = "> Use `cargo build` and `cargo run` to compile.";
+        let blocks = parse_markdown_content(md);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::Blockquote(text) = &blocks[0] {
+            assert!(text.contains("`cargo build`"));
+            assert!(text.contains("`cargo run`"));
+            // Both should be in the correct order
+            let build_pos = text.find("`cargo build`").unwrap();
+            let run_pos = text.find("`cargo run`").unwrap();
+            assert!(build_pos < run_pos, "cargo build should come before cargo run");
+        } else {
+            panic!("Expected blockquote");
+        }
     }
 }
