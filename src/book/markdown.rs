@@ -412,10 +412,15 @@ fn resolve_include(base_dir: &Path, path_spec: &str, is_rustdoc: bool) -> String
         (path_spec, None)
     };
 
+    // Early path traversal protection: block suspicious patterns before filesystem access
+    // This catches attacks even when the target file doesn't exist
+    if file_path.contains("..") || file_path.starts_with('/') || file_path.starts_with('\\') {
+        return format!("// Path traversal blocked: {}", file_path);
+    }
+
     let full_path = base_dir.join(file_path);
 
-    // Path traversal protection: ensure resolved path stays within book directory
-    // Canonicalize both paths to resolve .. and symlinks
+    // Secondary protection: canonicalize and verify path stays within book directory
     let canonical_full = match full_path.canonicalize() {
         Ok(p) => p,
         Err(_) => {
@@ -1209,5 +1214,44 @@ after"#;
         } else {
             panic!("Expected blockquote");
         }
+    }
+
+    #[test]
+    fn resolve_include_blocks_path_traversal() {
+        use std::path::Path;
+
+        let base_dir = Path::new("/tmp/book/src");
+
+        // Test parent directory traversal
+        let result = super::resolve_include(base_dir, "../../../etc/passwd", false);
+        assert!(
+            result.contains("Path traversal blocked"),
+            "Should block .. traversal, got: {}",
+            result
+        );
+
+        // Test absolute path
+        let result = super::resolve_include(base_dir, "/etc/passwd", false);
+        assert!(
+            result.contains("Path traversal blocked"),
+            "Should block absolute paths, got: {}",
+            result
+        );
+
+        // Test Windows-style absolute path
+        let result = super::resolve_include(base_dir, "\\etc\\passwd", false);
+        assert!(
+            result.contains("Path traversal blocked"),
+            "Should block backslash paths, got: {}",
+            result
+        );
+
+        // Test hidden traversal in middle of path
+        let result = super::resolve_include(base_dir, "foo/../../../etc/passwd", false);
+        assert!(
+            result.contains("Path traversal blocked"),
+            "Should block hidden .. in path, got: {}",
+            result
+        );
     }
 }

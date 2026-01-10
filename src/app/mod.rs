@@ -128,7 +128,9 @@ impl App {
             book_session.expanded_chapters = self.state.curriculum.expanded_chapters.clone();
         }
 
-        let _ = self.session.save();
+        if let Err(e) = self.session.save() {
+            tracing::warn!("Failed to save session: {}", e);
+        }
     }
 
     /// Run the application main loop
@@ -337,7 +339,9 @@ impl App {
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(0, |d| d.as_secs() as i64),
             );
-            let _ = self.progress.save();
+            if let Err(e) = self.progress.save() {
+                tracing::warn!("Failed to save progress: {}", e);
+            }
         }
     }
 
@@ -357,7 +361,9 @@ impl App {
         if section_progress.completed {
             section_progress.viewed = true;
         }
-        let _ = self.progress.save();
+        if let Err(e) = self.progress.save() {
+            tracing::warn!("Failed to save progress: {}", e);
+        }
     }
 
     /// Move panel focus left
