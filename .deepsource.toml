@@ -1,11 +1,17 @@
 version = 1
 
+exclude_patterns = [
+  "target/**",
+]
+
 [[analyzers]]
 name = "rust"
 enabled = true
 
   [analyzers.meta]
   msrv = "1.85"
+  # Allow higher complexity for parser functions
+  cyclomatic_complexity_threshold = "high"
 
 [[transformers]]
 name = "rustfmt"
