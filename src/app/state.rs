@@ -112,6 +112,16 @@ pub struct ContentState {
     pub search_matches: Vec<usize>,
     /// Currently highlighted match index
     pub current_match: Option<usize>,
+    /// Cursor block index (which content block the cursor is in)
+    pub cursor_block: usize,
+    /// Cursor character offset within the block
+    pub cursor_char: usize,
+    /// Whether cursor mode is active (showing cursor in content)
+    pub cursor_mode: bool,
+    /// Frame counter for cursor blinking (toggles every N frames)
+    pub cursor_blink_frame: usize,
+    /// Starting line number for each content block (computed during render)
+    pub block_line_offsets: Vec<usize>,
 }
 
 impl ContentState {
@@ -126,6 +136,278 @@ impl ContentState {
         if self.scroll_offset > max {
             self.scroll_offset = max;
         }
+    }
+
+    /// Get the starting line number for a given block index
+    pub fn get_block_line(&self, block_index: usize) -> usize {
+        self.block_line_offsets.get(block_index).copied().unwrap_or(0)
+    }
+
+    /// Ensure the cursor block is visible by scrolling if needed
+    pub fn ensure_block_visible(&mut self, block_index: usize) {
+        let block_line = self.get_block_line(block_index);
+
+        // If block is above visible area, scroll to show it near top
+        if block_line < self.scroll_offset {
+            self.scroll_offset = block_line.saturating_sub(2);
+        }
+        // If block is below visible area, scroll to show it
+        else if block_line >= self.scroll_offset + self.visible_height.saturating_sub(3) {
+            self.scroll_offset = block_line.saturating_sub(self.visible_height / 3);
+        }
+
+        self.clamp_scroll();
+    }
+
+    /// Enter cursor mode at the top of visible content
+    pub fn enter_cursor_mode(&mut self, first_visible_block: usize) {
+        self.cursor_mode = true;
+        self.cursor_block = first_visible_block;
+        self.cursor_char = 0;
+        self.cursor_blink_frame = 0;
+    }
+
+    /// Exit cursor mode
+    pub fn exit_cursor_mode(&mut self) {
+        self.cursor_mode = false;
+    }
+
+    /// Move cursor left
+    pub fn cursor_left(&mut self) {
+        if self.cursor_char > 0 {
+            self.cursor_char -= 1;
+        }
+    }
+
+    /// Move cursor right (needs max chars for boundary)
+    pub fn cursor_right(&mut self, max_chars: usize) {
+        if self.cursor_char < max_chars {
+            self.cursor_char += 1;
+        }
+    }
+
+    /// Move cursor up to previous block
+    pub fn cursor_up(&mut self, min_block: usize) {
+        if self.cursor_block > min_block {
+            self.cursor_block -= 1;
+            // Char position will be clamped by caller
+        }
+    }
+
+    /// Move cursor down to next block
+    pub fn cursor_down(&mut self, max_block: usize) {
+        if self.cursor_block < max_block {
+            self.cursor_block += 1;
+            // Char position will be clamped by caller
+        }
+    }
+
+    /// Move cursor to start of next word
+    pub fn cursor_word_forward(&mut self, text: &str) {
+        let chars: Vec<char> = text.chars().collect();
+        let len = chars.len();
+        if self.cursor_char >= len {
+            return;
+        }
+
+        let mut pos = self.cursor_char;
+
+        // Skip current word (non-whitespace)
+        while pos < len && !chars[pos].is_whitespace() {
+            pos += 1;
+        }
+
+        // Skip whitespace
+        while pos < len && chars[pos].is_whitespace() {
+            pos += 1;
+        }
+
+        self.cursor_char = pos;
+    }
+
+    /// Move cursor to start of previous word
+    pub fn cursor_word_backward(&mut self, text: &str) {
+        let chars: Vec<char> = text.chars().collect();
+        if self.cursor_char == 0 {
+            return;
+        }
+
+        let mut pos = self.cursor_char.saturating_sub(1);
+
+        // Skip whitespace before current position
+        while pos > 0 && chars[pos].is_whitespace() {
+            pos -= 1;
+        }
+
+        // Skip current word back to its start
+        while pos > 0 && !chars[pos - 1].is_whitespace() {
+            pos -= 1;
+        }
+
+        self.cursor_char = pos;
+    }
+
+    /// Move cursor to end of current/next word
+    pub fn cursor_word_end(&mut self, text: &str) {
+        let chars: Vec<char> = text.chars().collect();
+        let len = chars.len();
+        if self.cursor_char >= len {
+            return;
+        }
+
+        let mut pos = self.cursor_char;
+
+        // If at a word char, move forward one
+        if pos < len && !chars[pos].is_whitespace() {
+            pos += 1;
+        }
+
+        // Skip whitespace
+        while pos < len && chars[pos].is_whitespace() {
+            pos += 1;
+        }
+
+        // Skip to end of word
+        while pos < len && !chars[pos].is_whitespace() {
+            pos += 1;
+        }
+
+        // Back up one to be AT the last char of the word
+        if pos > self.cursor_char {
+            self.cursor_char = pos.saturating_sub(1).max(self.cursor_char);
+        }
+    }
+
+    /// Move cursor down one line within the current block
+    pub fn cursor_line_down(&mut self, text: &str) {
+        let chars: Vec<char> = text.chars().collect();
+        let len = chars.len();
+        if len == 0 {
+            return;
+        }
+
+        // Clamp cursor position to valid range
+        let cursor_pos = self.cursor_char.min(len.saturating_sub(1));
+
+        // Find the next newline character after current cursor position
+        let mut newline_pos = cursor_pos;
+        while newline_pos < len && chars[newline_pos] != '\n' {
+            newline_pos += 1;
+        }
+
+        // If we didn't find a newline, check if there's any content after current position
+        // that we might have missed (e.g., if cursor is at end of block but not on last line)
+        if newline_pos >= len {
+            // No newline found - we're on the last line
+            // But as a fallback, if there are characters after cursor, try to find them
+            if cursor_pos < len.saturating_sub(1) {
+                // There's content after cursor - search from the very start for lines
+                // This handles edge cases where cursor position might be misaligned
+                let mut search_pos = cursor_pos + 1;
+                while search_pos < len {
+                    if chars[search_pos] == '\n' && search_pos + 1 < len {
+                        // Found a newline with content after it
+                        self.cursor_char = search_pos + 1;
+                        return;
+                    }
+                    search_pos += 1;
+                }
+            }
+            return;
+        }
+
+        // The next line starts right after the newline
+        let next_line_start = newline_pos + 1;
+
+        // If next_line_start is at or past the end, there's no actual content after
+        if next_line_start >= len {
+            return;
+        }
+
+        // Find the end of the next line
+        let mut next_line_end = next_line_start;
+        while next_line_end < len && chars[next_line_end] != '\n' {
+            next_line_end += 1;
+        }
+
+        // Move to same column on next line, or end of line if shorter
+        let next_line_len = next_line_end - next_line_start;
+
+        if next_line_len == 0 {
+            // Empty line
+            self.cursor_char = next_line_start;
+        } else {
+            // Go to END of line - this ensures visual selection includes the full line
+            // when navigating down with Ctrl+J
+            self.cursor_char = next_line_end.saturating_sub(1);
+        }
+    }
+
+    /// Move cursor up one line within the current block
+    pub fn cursor_line_up(&mut self, text: &str) {
+        let chars: Vec<char> = text.chars().collect();
+        if chars.is_empty() || self.cursor_char == 0 {
+            return;
+        }
+
+        // Find current line boundaries and column
+        let (line_start, _line_end, col) = self.find_line_info(&chars);
+
+        // If we're on the first line, stay there
+        if line_start == 0 {
+            return;
+        }
+
+        // Find the previous line (line_start - 1 is the newline, so go before that)
+        let prev_line_end = line_start - 1; // Position of newline character
+        let mut prev_line_start = prev_line_end;
+        while prev_line_start > 0 && chars[prev_line_start - 1] != '\n' {
+            prev_line_start -= 1;
+        }
+
+        // Move to same column on previous line, or end of line if shorter
+        let prev_line_len = prev_line_end - prev_line_start;
+        let target_col = col.min(prev_line_len.saturating_sub(1));
+        self.cursor_char = prev_line_start + target_col;
+
+        // Handle empty lines
+        if prev_line_len == 0 {
+            self.cursor_char = prev_line_start;
+        }
+    }
+
+    /// Helper: Find the start, end, and column position of the current line
+    fn find_line_info(&self, chars: &[char]) -> (usize, usize, usize) {
+        let len = chars.len();
+        let cursor_pos = self.cursor_char.min(len.saturating_sub(1));
+
+        // Find line start
+        let mut line_start = cursor_pos;
+        while line_start > 0 && chars[line_start - 1] != '\n' {
+            line_start -= 1;
+        }
+
+        // Find line end
+        let mut line_end = cursor_pos;
+        while line_end < len && chars[line_end] != '\n' {
+            line_end += 1;
+        }
+
+        // Column is position within line
+        let col = cursor_pos - line_start;
+
+        (line_start, line_end, col)
+    }
+
+    /// Tick the blink frame counter
+    pub fn tick_blink(&mut self) {
+        self.cursor_blink_frame = self.cursor_blink_frame.wrapping_add(1);
+    }
+
+    /// Whether cursor should be visible (for blinking effect)
+    pub fn cursor_visible(&self) -> bool {
+        // Blink every ~500ms at 60fps = every 30 frames
+        (self.cursor_blink_frame / 15) % 2 == 0
     }
 }
 
@@ -406,6 +688,174 @@ impl LandingAnimation {
     }
 }
 
+/// State for the notes panel
+#[derive(Debug, Clone, Default)]
+pub struct NotesState {
+    /// Currently selected note index in the panel
+    pub selected_index: usize,
+    /// Scroll offset for the notes list
+    pub scroll_offset: usize,
+    /// Visible height in lines (updated on render)
+    pub visible_height: usize,
+    /// ID of note being edited (if any)
+    pub editing: Option<String>,
+    /// Whether we're in note creation mode
+    pub creating: bool,
+    /// Input buffer for creating/editing notes
+    pub input: String,
+    /// Cursor position in input
+    pub cursor: usize,
+}
+
+impl NotesState {
+    /// Start creating a new note
+    pub fn start_creating(&mut self) {
+        self.creating = true;
+        self.editing = None;
+        self.input.clear();
+        self.cursor = 0;
+    }
+
+    /// Start editing an existing note
+    pub fn start_editing(&mut self, note_id: &str, content: &str) {
+        self.editing = Some(note_id.to_string());
+        self.creating = false;
+        self.input = content.to_string();
+        self.cursor = content.len();
+    }
+
+    /// Cancel editing/creating
+    pub fn cancel_edit(&mut self) {
+        self.editing = None;
+        self.creating = false;
+        self.input.clear();
+        self.cursor = 0;
+    }
+
+    /// Check if in edit mode (creating or editing)
+    pub fn is_editing(&self) -> bool {
+        self.creating || self.editing.is_some()
+    }
+
+    /// Insert a character at cursor position
+    pub fn insert_char(&mut self, c: char) {
+        let byte_pos = self
+            .input
+            .char_indices()
+            .nth(self.cursor)
+            .map_or(self.input.len(), |(pos, _)| pos);
+        self.input.insert(byte_pos, c);
+        self.cursor += 1;
+    }
+
+    /// Delete character before cursor
+    pub fn delete_char(&mut self) {
+        if self.cursor > 0 {
+            let byte_pos = self
+                .input
+                .char_indices()
+                .nth(self.cursor - 1)
+                .map(|(pos, _)| pos)
+                .unwrap_or(0);
+            let next_byte_pos = self
+                .input
+                .char_indices()
+                .nth(self.cursor)
+                .map_or(self.input.len(), |(pos, _)| pos);
+            self.input.replace_range(byte_pos..next_byte_pos, "");
+            self.cursor -= 1;
+        }
+    }
+
+    /// Move cursor left
+    pub fn move_left(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        }
+    }
+
+    /// Move cursor right
+    pub fn move_right(&mut self) {
+        let char_count = self.input.chars().count();
+        if self.cursor < char_count {
+            self.cursor += 1;
+        }
+    }
+}
+
+/// State for visual mode (text selection)
+/// The anchor is where selection started; cursor position comes from ContentState
+#[derive(Debug, Clone, Default)]
+pub struct VisualModeState {
+    /// Whether visual mode (selection) is active
+    pub active: bool,
+    /// Block index where selection started (anchor)
+    pub anchor_block: usize,
+    /// Character offset within anchor block
+    pub anchor_char: usize,
+}
+
+impl VisualModeState {
+    /// Enter visual mode, setting anchor at current cursor position
+    pub fn enter(&mut self, block_index: usize, char_offset: usize) {
+        self.active = true;
+        self.anchor_block = block_index;
+        self.anchor_char = char_offset;
+    }
+
+    /// Exit visual mode
+    pub fn exit(&mut self) {
+        self.active = false;
+    }
+
+    /// Get the selection range given the current cursor position
+    /// Returns (start_block, start_char, end_block, end_char) where start <= end
+    pub fn selection_range(&self, cursor_block: usize, cursor_char: usize) -> (usize, usize, usize, usize) {
+        // Compare positions to determine order
+        if self.anchor_block < cursor_block
+            || (self.anchor_block == cursor_block && self.anchor_char <= cursor_char)
+        {
+            (self.anchor_block, self.anchor_char, cursor_block, cursor_char)
+        } else {
+            (cursor_block, cursor_char, self.anchor_block, self.anchor_char)
+        }
+    }
+
+    /// Check if a position is within the selection
+    pub fn is_selected(
+        &self,
+        block_index: usize,
+        char_index: usize,
+        cursor_block: usize,
+        cursor_char: usize,
+    ) -> bool {
+        if !self.active {
+            return false;
+        }
+
+        let (start_block, start_char, end_block, end_char) =
+            self.selection_range(cursor_block, cursor_char);
+
+        if block_index < start_block || block_index > end_block {
+            return false;
+        }
+
+        if block_index == start_block && block_index == end_block {
+            // Selection within single block
+            char_index >= start_char && char_index < end_char
+        } else if block_index == start_block {
+            // Start block - from start_char to end
+            char_index >= start_char
+        } else if block_index == end_block {
+            // End block - from start to end_char
+            char_index < end_char
+        } else {
+            // Middle block - fully selected
+            true
+        }
+    }
+}
+
 /// Full application state
 #[derive(Debug, Default)]
 pub struct AppState {
@@ -441,6 +891,12 @@ pub struct AppState {
 
     /// Command line state
     pub command_line: CommandLineState,
+
+    /// Notes panel state
+    pub notes: NotesState,
+
+    /// Visual mode state (text selection)
+    pub visual_mode: VisualModeState,
 }
 
 #[cfg(test)]
@@ -820,5 +1276,545 @@ mod tests {
         state.scroll_offset = 10;
         state.clamp_scroll();
         assert_eq!(state.scroll_offset, 0);
+    }
+
+    // NotesState tests
+
+    #[test]
+    fn notes_state_default() {
+        let state = NotesState::default();
+        assert_eq!(state.selected_index, 0);
+        assert_eq!(state.scroll_offset, 0);
+        assert!(state.editing.is_none());
+        assert!(!state.creating);
+        assert!(state.input.is_empty());
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn notes_state_start_creating() {
+        let mut state = NotesState::default();
+        state.input = "old content".into();
+        state.cursor = 5;
+        state.editing = Some("note123".into());
+
+        state.start_creating();
+
+        assert!(state.creating);
+        assert!(state.editing.is_none());
+        assert!(state.input.is_empty());
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn notes_state_start_editing() {
+        let mut state = NotesState::default();
+        state.creating = true;
+
+        state.start_editing("note456", "existing content");
+
+        assert!(!state.creating);
+        assert_eq!(state.editing, Some("note456".into()));
+        assert_eq!(state.input, "existing content");
+        assert_eq!(state.cursor, 16); // Length of "existing content"
+    }
+
+    #[test]
+    fn notes_state_cancel_edit() {
+        let mut state = NotesState::default();
+        state.creating = true;
+        state.editing = Some("note789".into());
+        state.input = "some text".into();
+        state.cursor = 4;
+
+        state.cancel_edit();
+
+        assert!(!state.creating);
+        assert!(state.editing.is_none());
+        assert!(state.input.is_empty());
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn notes_state_is_editing() {
+        let mut state = NotesState::default();
+        assert!(!state.is_editing());
+
+        state.creating = true;
+        assert!(state.is_editing());
+
+        state.creating = false;
+        state.editing = Some("note123".into());
+        assert!(state.is_editing());
+
+        state.editing = None;
+        assert!(!state.is_editing());
+    }
+
+    #[test]
+    fn notes_state_insert_char() {
+        let mut state = NotesState::default();
+        state.insert_char('h');
+        state.insert_char('i');
+        assert_eq!(state.input, "hi");
+        assert_eq!(state.cursor, 2);
+    }
+
+    #[test]
+    fn notes_state_insert_char_unicode() {
+        let mut state = NotesState::default();
+        state.insert_char('日');
+        state.insert_char('本');
+        state.insert_char('語');
+        assert_eq!(state.input, "日本語");
+        assert_eq!(state.cursor, 3);
+    }
+
+    #[test]
+    fn notes_state_insert_char_middle() {
+        let mut state = NotesState::default();
+        state.input = "hlo".into();
+        state.cursor = 1;
+        state.insert_char('e');
+        state.insert_char('l');
+        assert_eq!(state.input, "hello");
+        assert_eq!(state.cursor, 3);
+    }
+
+    #[test]
+    fn notes_state_delete_char() {
+        let mut state = NotesState::default();
+        state.input = "hello".into();
+        state.cursor = 5;
+        state.delete_char();
+        assert_eq!(state.input, "hell");
+        assert_eq!(state.cursor, 4);
+    }
+
+    #[test]
+    fn notes_state_delete_char_at_start() {
+        let mut state = NotesState::default();
+        state.input = "hello".into();
+        state.cursor = 0;
+        state.delete_char();
+        assert_eq!(state.input, "hello"); // No change
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn notes_state_delete_char_unicode() {
+        let mut state = NotesState::default();
+        state.input = "日本語".into();
+        state.cursor = 3;
+        state.delete_char();
+        assert_eq!(state.input, "日本");
+        assert_eq!(state.cursor, 2);
+    }
+
+    #[test]
+    fn notes_state_move_left() {
+        let mut state = NotesState::default();
+        state.input = "test".into();
+        state.cursor = 3;
+        state.move_left();
+        assert_eq!(state.cursor, 2);
+        state.move_left();
+        state.move_left();
+        assert_eq!(state.cursor, 0);
+        state.move_left(); // Should not go below 0
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn notes_state_move_right() {
+        let mut state = NotesState::default();
+        state.input = "test".into();
+        state.cursor = 1;
+        state.move_right();
+        assert_eq!(state.cursor, 2);
+        state.move_right();
+        state.move_right();
+        assert_eq!(state.cursor, 4);
+        state.move_right(); // Should not exceed length
+        assert_eq!(state.cursor, 4);
+    }
+
+    // VisualModeState tests
+
+    #[test]
+    fn visual_mode_default() {
+        let state = VisualModeState::default();
+        assert!(!state.active);
+        assert_eq!(state.anchor_block, 0);
+        assert_eq!(state.anchor_char, 0);
+    }
+
+    #[test]
+    fn visual_mode_enter_exit() {
+        let mut state = VisualModeState::default();
+        state.enter(2, 10);
+        assert!(state.active);
+        assert_eq!(state.anchor_block, 2);
+        assert_eq!(state.anchor_char, 10);
+
+        state.exit();
+        assert!(!state.active);
+    }
+
+    #[test]
+    fn visual_mode_selection_range_forward() {
+        let mut state = VisualModeState::default();
+        state.enter(1, 5);
+
+        // Cursor at block 2, char 10
+        let (sb, sc, eb, ec) = state.selection_range(2, 10);
+        assert_eq!((sb, sc, eb, ec), (1, 5, 2, 10));
+    }
+
+    #[test]
+    fn visual_mode_selection_range_backward() {
+        let mut state = VisualModeState::default();
+        state.enter(3, 15);
+
+        // Cursor at block 1, char 5 (before anchor)
+        let (sb, sc, eb, ec) = state.selection_range(1, 5);
+        assert_eq!((sb, sc, eb, ec), (1, 5, 3, 15));
+    }
+
+    #[test]
+    fn visual_mode_is_selected_single_block() {
+        let mut state = VisualModeState::default();
+        state.enter(1, 5);
+
+        // Cursor at block 1, char 10
+        let cursor_block = 1;
+        let cursor_char = 10;
+
+        assert!(!state.is_selected(0, 5, cursor_block, cursor_char)); // Wrong block
+        assert!(!state.is_selected(1, 4, cursor_block, cursor_char)); // Before selection
+        assert!(state.is_selected(1, 5, cursor_block, cursor_char)); // Start
+        assert!(state.is_selected(1, 7, cursor_block, cursor_char)); // Middle
+        assert!(state.is_selected(1, 9, cursor_block, cursor_char)); // Last char
+        assert!(!state.is_selected(1, 10, cursor_block, cursor_char)); // After selection (exclusive end)
+    }
+
+    #[test]
+    fn visual_mode_is_selected_multi_block() {
+        let mut state = VisualModeState::default();
+        state.enter(1, 5);
+
+        // Cursor at block 3, char 10
+        let cursor_block = 3;
+        let cursor_char = 10;
+
+        // Block 0 - not selected
+        assert!(!state.is_selected(0, 0, cursor_block, cursor_char));
+
+        // Block 1 - from char 5 onwards
+        assert!(!state.is_selected(1, 4, cursor_block, cursor_char));
+        assert!(state.is_selected(1, 5, cursor_block, cursor_char));
+        assert!(state.is_selected(1, 100, cursor_block, cursor_char)); // Any char after start
+
+        // Block 2 - fully selected
+        assert!(state.is_selected(2, 0, cursor_block, cursor_char));
+        assert!(state.is_selected(2, 50, cursor_block, cursor_char));
+
+        // Block 3 - up to char 10
+        assert!(state.is_selected(3, 0, cursor_block, cursor_char));
+        assert!(state.is_selected(3, 9, cursor_block, cursor_char));
+        assert!(!state.is_selected(3, 10, cursor_block, cursor_char));
+
+        // Block 4 - not selected
+        assert!(!state.is_selected(4, 0, cursor_block, cursor_char));
+    }
+
+    #[test]
+    fn visual_mode_not_active_not_selected() {
+        let state = VisualModeState::default();
+        assert!(!state.is_selected(0, 0, 0, 0));
+        assert!(!state.is_selected(1, 5, 1, 5));
+    }
+
+    // ContentState cursor tests
+
+    #[test]
+    fn content_cursor_movement() {
+        let mut state = ContentState::default();
+        state.enter_cursor_mode(0);
+        assert!(state.cursor_mode);
+        assert_eq!(state.cursor_block, 0);
+        assert_eq!(state.cursor_char, 0);
+
+        // Move right
+        state.cursor_right(10);
+        assert_eq!(state.cursor_char, 1);
+
+        // Move left
+        state.cursor_left();
+        assert_eq!(state.cursor_char, 0);
+
+        // Can't go past start
+        state.cursor_left();
+        assert_eq!(state.cursor_char, 0);
+
+        // Move down
+        state.cursor_down(5);
+        assert_eq!(state.cursor_block, 1);
+
+        // Move up
+        state.cursor_up(0);
+        assert_eq!(state.cursor_block, 0);
+
+        // Can't go above min
+        state.cursor_up(0);
+        assert_eq!(state.cursor_block, 0);
+    }
+
+    #[test]
+    fn content_cursor_word_motions() {
+        let mut state = ContentState::default();
+        state.enter_cursor_mode(0);
+
+        let text = "hello world test";
+
+        // Word forward
+        state.cursor_word_forward(text);
+        assert_eq!(state.cursor_char, 6);
+
+        state.cursor_word_forward(text);
+        assert_eq!(state.cursor_char, 12);
+
+        // Word backward
+        state.cursor_word_backward(text);
+        assert_eq!(state.cursor_char, 6);
+
+        state.cursor_word_backward(text);
+        assert_eq!(state.cursor_char, 0);
+    }
+
+    #[test]
+    fn content_cursor_blink() {
+        let mut state = ContentState::default();
+        state.enter_cursor_mode(0);
+
+        assert!(state.cursor_visible()); // Initially visible
+
+        // Tick through frames
+        for _ in 0..15 {
+            state.tick_blink();
+        }
+        assert!(!state.cursor_visible()); // Now hidden
+
+        for _ in 0..15 {
+            state.tick_blink();
+        }
+        assert!(state.cursor_visible()); // Visible again
+    }
+
+    #[test]
+    fn content_cursor_line_navigation() {
+        let mut state = ContentState::default();
+        state.enter_cursor_mode(0);
+
+        // Three lines of text
+        let text = "line1\nline2\nline3";
+
+        // Start at beginning (line 1)
+        state.cursor_char = 0;
+
+        // Move down to line 2 (goes to END of line)
+        state.cursor_line_down(text);
+        assert_eq!(state.cursor_char, 10); // END of line2
+
+        // Move down to line 3 (goes to END of line)
+        state.cursor_line_down(text);
+        assert_eq!(state.cursor_char, 16); // END of line3
+
+        // Can't go past last line
+        state.cursor_line_down(text);
+        assert_eq!(state.cursor_char, 16); // Still at end of line3
+
+        // Move back up to line 2
+        state.cursor_line_up(text);
+        assert_eq!(state.cursor_char, 10); // End of line2 (maintains column)
+
+        // Move up to line 1 (maintains column 4)
+        state.cursor_line_up(text);
+        assert_eq!(state.cursor_char, 4); // Column 4 on line1
+
+        // Can't go above first line
+        state.cursor_line_up(text);
+        assert_eq!(state.cursor_char, 4); // Still on line1
+    }
+
+    #[test]
+    fn content_cursor_line_navigation_with_column() {
+        let mut state = ContentState::default();
+        state.enter_cursor_mode(0);
+
+        // Lines of different lengths
+        let text = "short\nmedium len\nend";
+
+        // Start at column 3 of line 1
+        state.cursor_char = 3;
+
+        // Move down - now goes to END of line (for visual selection)
+        state.cursor_line_down(text);
+        assert_eq!(state.cursor_char, 15); // END of "medium len"
+
+        // Move down - goes to END of line 3
+        state.cursor_line_down(text);
+        assert_eq!(state.cursor_char, 19); // END of "end"
+    }
+
+    #[test]
+    fn content_cursor_line_navigation_empty_lines() {
+        let mut state = ContentState::default();
+        state.enter_cursor_mode(0);
+
+        // Text with empty line in middle
+        let text = "first\n\nthird";
+
+        state.cursor_char = 0;
+
+        // Move to empty line
+        state.cursor_line_down(text);
+        assert_eq!(state.cursor_char, 6); // Position of empty line
+
+        // Move to third line (last line - goes to END)
+        state.cursor_line_down(text);
+        assert_eq!(state.cursor_char, 11); // END of "third" (last line)
+
+        // Can't go past last line
+        state.cursor_line_down(text);
+        assert_eq!(state.cursor_char, 11);
+    }
+
+    #[test]
+    fn content_cursor_line_navigation_code_block() {
+        let mut state = ContentState::default();
+        state.enter_cursor_mode(0);
+
+        // Mimics actual code block with 4 lines (line 2 is empty)
+        // Newlines at positions: 30, 31, 70
+        // Line 1: 0-29, Line 2 (empty): 31, Line 3: 32-69, Line 4: 71-103
+        let text = "println!(\"Guess the number!\");\n\nprintln!(\"Please input your guess.\");\nprintln!(\"You guessed: {guess}\");";
+
+        state.cursor_char = 0; // Start at line 1
+
+        // Move to line 2 (empty) - position 31 (the second newline)
+        state.cursor_line_down(text);
+        assert_eq!(state.cursor_char, 31, "Should be at empty line 2");
+
+        // Move to line 3 - goes to END of line
+        state.cursor_line_down(text);
+        // Line 3 is "println!("Please input your guess.");" at positions 32-68, \n at 69
+        assert_eq!(state.cursor_char, 68, "Should be at END of line 3");
+
+        // Move to line 4 - goes to END of line
+        state.cursor_line_down(text);
+        // Line 4 is "println!("You guessed: {guess}");" which is 33 chars at positions 70-102
+        assert_eq!(state.cursor_char, 102, "Should be at END of line 4");
+
+        // Verify we're on line 4 by checking we can't go further
+        let pos_on_line4 = state.cursor_char;
+        state.cursor_line_down(text);
+        assert_eq!(state.cursor_char, pos_on_line4, "Should stay on last line");
+    }
+
+    #[test]
+    fn content_cursor_line_navigation_from_end_of_line() {
+        let mut state = ContentState::default();
+        state.enter_cursor_mode(0);
+
+        // Same structure as the problematic code block
+        // Newlines at positions: 30, 31, 69
+        let text = "println!(\"Guess the number!\");\n\nprintln!(\"Please input your guess.\");\nprintln!(\"You guessed: {guess}\");";
+
+        // Start at the END of line 3 (position 68, just before the newline at 69)
+        state.cursor_char = 68;
+
+        // Move to line 4
+        state.cursor_line_down(text);
+
+        // Should be on line 4 now (starts at 70)
+        assert!(state.cursor_char >= 70, "Should be on line 4, got {}", state.cursor_char);
+    }
+
+    #[test]
+    fn content_cursor_line_navigation_from_newline() {
+        let mut state = ContentState::default();
+        state.enter_cursor_mode(0);
+
+        // Same structure
+        let text = "println!(\"Guess the number!\");\n\nprintln!(\"Please input your guess.\");\nprintln!(\"You guessed: {guess}\");";
+
+        // Start AT the newline at end of line 3 (position 69)
+        state.cursor_char = 69;
+
+        // Move to line 4
+        state.cursor_line_down(text);
+
+        // Should be on line 4 now
+        assert!(state.cursor_char >= 70, "Should be on line 4, got {}", state.cursor_char);
+    }
+
+    #[test]
+    fn content_cursor_line_navigation_with_trailing_newline() {
+        let mut state = ContentState::default();
+        state.enter_cursor_mode(0);
+
+        // Text WITH trailing newline (like some parsed code blocks might have)
+        let text = "line1\nline2\nline3\n";
+
+        state.cursor_char = 0;
+
+        // Move to line 2 (goes to END of line)
+        state.cursor_line_down(text);
+        assert_eq!(state.cursor_char, 10, "Should be at END of line 2");
+
+        // Move to line 3 (goes to END of line)
+        state.cursor_line_down(text);
+        assert_eq!(state.cursor_char, 16, "Should be at END of line 3");
+
+        // Try to move past line 3 - should stay (trailing newline = no more content)
+        state.cursor_line_down(text);
+        assert_eq!(state.cursor_char, 16, "Should stay at END of line 3");
+    }
+
+    #[test]
+    fn content_cursor_line_navigation_exact_book_content() {
+        let mut state = ContentState::default();
+        state.enter_cursor_mode(0);
+
+        // Exact content from the Rust book code block (with 4-space indentation)
+        let text = "    println!(\"Guess the number!\");\n\n    println!(\"Please input your guess.\");\n    println!(\"You guessed: {guess}\");";
+
+        // Verify structure
+        assert_eq!(text.chars().filter(|c| *c == '\n').count(), 3, "Should have 3 newlines");
+        let text_len = text.chars().count();
+
+        state.cursor_char = 0; // Start at line 1
+
+        // Move to line 2 (empty line)
+        state.cursor_line_down(text);
+        let line2_pos = state.cursor_char;
+        assert!(text.chars().nth(line2_pos - 1) == Some('\n'), "Should be right after newline");
+
+        // Move to line 3
+        state.cursor_line_down(text);
+        let line3_pos = state.cursor_char;
+        assert!(line3_pos > line2_pos, "Should have advanced");
+
+        // Move to line 4 (last line) - goes to END of line for visual selection
+        state.cursor_line_down(text);
+        let line4_pos = state.cursor_char;
+        assert!(line4_pos > line3_pos, "Should be on line 4, but got same position {} as line 3", line4_pos);
+
+        // Verify we're at the END of the last line
+        assert_eq!(line4_pos, text_len - 1, "Should be at last character of text");
+
+        // The character at cursor should be the last char of the line (';')
+        assert_eq!(text.chars().nth(line4_pos), Some(';'), "Should be at ';' at end of last line");
     }
 }

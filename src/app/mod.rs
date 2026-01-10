@@ -8,7 +8,7 @@ use std::io::{self, Stdout};
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -16,7 +16,9 @@ use ratatui::{Terminal, backend::CrosstermBackend};
 
 use crate::book::storage;
 use crate::config::{Config, progress::Progress, session::Session};
+use crate::notes::NotesStore;
 use crate::ui;
+use crate::ui::image::ImageCache;
 use command::{Command, ParseResult, parse_command};
 use input::{Action, key_with_modifier_to_action};
 use state::{AppState, CommandMode, Panel, Screen};
@@ -35,6 +37,12 @@ pub struct App {
     /// Session state (UI state persistence)
     session: Session,
 
+    /// Notes storage
+    notes_store: NotesStore,
+
+    /// Image cache for rendering images in content
+    image_cache: ImageCache,
+
     /// Terminal backend
     terminal: Terminal<CrosstermBackend<Stdout>>,
 }
@@ -45,8 +53,20 @@ impl App {
         let terminal = Self::setup_terminal()?;
         let progress = Progress::load().unwrap_or_default();
         let session = Session::load().unwrap_or_default();
+        let notes_store = NotesStore::load().unwrap_or_default();
 
-        let mut app = Self { config, state: AppState::default(), progress, session, terminal };
+        // Create image cache after terminal setup for proper protocol detection
+        let image_cache = ImageCache::new();
+
+        let mut app = Self {
+            config,
+            state: AppState::default(),
+            progress,
+            session,
+            notes_store,
+            image_cache,
+            terminal,
+        };
 
         // Apply saved panel widths from session
         app.state.panel_visibility.curriculum_width_percent = app.session.curriculum_width_percent;
@@ -72,6 +92,9 @@ impl App {
         let Some(entry) = entry else { return };
         let Ok(book) = storage::load_book(entry) else { return };
 
+        // Set image cache base path from book source
+        self.set_image_base_path(&book);
+
         let book_id = book.metadata.id.clone();
         self.state.book = Some(book);
 
@@ -86,6 +109,21 @@ impl App {
         } else {
             self.state.current_chapter = 0;
             self.state.current_section = 0;
+        }
+    }
+
+    /// Set the image cache base path from a book's source
+    fn set_image_base_path(&mut self, book: &crate::book::Book) {
+        use crate::book::BookSource;
+        match &book.metadata.source {
+            BookSource::Markdown(path) => {
+                self.image_cache.set_base_path(path.clone());
+            }
+            BookSource::Epub(_) => {
+                // EPUB images are embedded, not file-based
+                // Clear the base path so images aren't found
+                self.image_cache.clear();
+            }
         }
     }
 
@@ -148,8 +186,10 @@ impl App {
             let state = &mut self.state;
             let config = &self.config;
             let progress = &self.progress;
+            let notes_store = &self.notes_store;
+            let image_cache = &mut self.image_cache;
             self.terminal.draw(|frame| {
-                ui::draw(frame, state, config, progress);
+                ui::draw(frame, state, config, progress, notes_store, image_cache);
             })?;
 
             // Handle all pending events before next redraw (makes scrolling feel faster)
@@ -157,8 +197,11 @@ impl App {
             while event::poll(std::time::Duration::from_millis(0))? {
                 if let Event::Key(key_event) = event::read()? {
                     if key_event.kind == KeyEventKind::Press {
+                        // Route to notes input if editing a note
+                        if self.state.notes.is_editing() {
+                            self.handle_notes_input(key_event.code);
                         // Route to command line if in input mode
-                        if self.state.command_line.is_input_mode() {
+                        } else if self.state.command_line.is_input_mode() {
                             match self.handle_command_line_input(key_event.code).await {
                                 Ok(true) => {
                                     should_quit = true;
@@ -169,6 +212,22 @@ impl App {
                                     self.state.command_line.set_error(format!("Error: {}", e));
                                 }
                             }
+                        // Special handling for Ctrl+J which terminals often send as different codes
+                        // Works in both cursor mode and visual mode (for extending selection)
+                        // NOTE: Terminals may send Ctrl+J as: '\n', '\r', Enter, or 'j' with CONTROL
+                        } else if self.state.content.cursor_mode
+                            && (key_event.code == KeyCode::Char('\n')
+                                || key_event.code == KeyCode::Char('\r')
+                                || key_event.code == KeyCode::Enter
+                                || (key_event.code == KeyCode::Char('j')
+                                    && key_event.modifiers.contains(KeyModifiers::CONTROL)))
+                        {
+                            // Direct line-down for cursor/visual mode
+                            if let Some(text) = self.get_block_text(self.state.content.cursor_block) {
+                                self.state.content.cursor_line_down(&text);
+                            }
+                            self.ensure_cursor_visible();
+                            self.update_cursor_message();
                         } else if let Some(action) =
                             key_with_modifier_to_action(key_event.code, key_event.modifiers)
                         {
@@ -243,8 +302,20 @@ impl App {
 
     /// Handle actions on the main screen
     fn handle_main_action(&mut self, action: Action) -> Result<bool> {
+        // If content panel is focused, handle cursor/visual mode
+        if self.state.focused_panel == Panel::Content && self.state.content.cursor_mode {
+            return self.handle_content_cursor_action(action);
+        }
+
         match action {
             Action::Quit => return Ok(true),
+
+            // Toggle visual mode (only when content focused)
+            Action::VisualMode => {
+                if self.state.focused_panel == Panel::Content {
+                    self.toggle_visual_mode();
+                }
+            }
 
             // Panel toggles
             Action::ToggleCurriculum => {
@@ -315,9 +386,362 @@ impl App {
                 self.toggle_section_complete();
             }
 
+            // Note actions
+            Action::CreateNote => {
+                self.start_creating_note();
+            }
+            Action::EditNote => {
+                self.start_editing_note();
+            }
+            Action::DeleteNote => {
+                self.delete_selected_note();
+            }
+
             _ => {}
         }
         Ok(false)
+    }
+
+    /// Handle actions when cursor mode is active in content panel
+    fn handle_content_cursor_action(&mut self, action: Action) -> Result<bool> {
+        match action {
+            Action::Quit => return Ok(true),
+
+            Action::Back => {
+                if self.state.visual_mode.active {
+                    // Exit visual mode but keep cursor mode
+                    self.state.visual_mode.exit();
+                    self.state.command_line.set_message("-- CURSOR -- (h/j/k/l to move, v to select, Esc to exit)");
+                } else {
+                    // Exit cursor mode
+                    self.state.content.exit_cursor_mode();
+                    self.state.command_line.clear_message();
+                }
+            }
+
+            Action::VisualMode => {
+                self.toggle_visual_mode();
+            }
+
+            // Cursor movement
+            Action::Left => {
+                self.state.content.cursor_left();
+                self.ensure_cursor_visible();
+                self.update_cursor_message();
+            }
+            Action::Right => {
+                let max_chars = self.get_block_char_count(self.state.content.cursor_block);
+                self.state.content.cursor_right(max_chars);
+                self.ensure_cursor_visible();
+                self.update_cursor_message();
+            }
+            Action::Up => {
+                let min_block = self.find_first_text_block_index();
+                self.state.content.cursor_up(min_block);
+                // Clamp char position to new block
+                let max_chars = self.get_block_char_count(self.state.content.cursor_block);
+                if self.state.content.cursor_char > max_chars {
+                    self.state.content.cursor_char = max_chars;
+                }
+                self.ensure_cursor_visible();
+                self.update_cursor_message();
+            }
+            Action::Down => {
+                let max_block = self.get_block_count().saturating_sub(1);
+                self.state.content.cursor_down(max_block);
+                // Clamp char position to new block
+                let max_chars = self.get_block_char_count(self.state.content.cursor_block);
+                if self.state.content.cursor_char > max_chars {
+                    self.state.content.cursor_char = max_chars;
+                }
+                self.ensure_cursor_visible();
+                self.update_cursor_message();
+            }
+
+            // Word motions
+            Action::WordForward => {
+                if let Some(text) = self.get_block_text(self.state.content.cursor_block) {
+                    self.state.content.cursor_word_forward(&text);
+                    self.ensure_cursor_visible();
+                    self.update_cursor_message();
+                }
+            }
+            Action::WordBackward => {
+                if let Some(text) = self.get_block_text(self.state.content.cursor_block) {
+                    self.state.content.cursor_word_backward(&text);
+                    self.ensure_cursor_visible();
+                    self.update_cursor_message();
+                }
+            }
+            Action::WordEnd => {
+                if let Some(text) = self.get_block_text(self.state.content.cursor_block) {
+                    self.state.content.cursor_word_end(&text);
+                    self.ensure_cursor_visible();
+                    self.update_cursor_message();
+                }
+            }
+
+            // Create note on selection (visual mode) or move line down (cursor mode)
+            // Note: Enter key (Ctrl+J) often comes through as Select action
+            Action::CreateNote => {
+                if self.state.visual_mode.active {
+                    self.create_note_from_selection();
+                }
+            }
+            Action::Select => {
+                if self.state.visual_mode.active {
+                    self.create_note_from_selection();
+                } else {
+                    // In cursor mode, Enter moves down one line (like Ctrl+J)
+                    if let Some(text) = self.get_block_text(self.state.content.cursor_block) {
+                        self.state.content.cursor_line_down(&text);
+                    }
+                    self.ensure_cursor_visible();
+                    self.update_cursor_message();
+                }
+            }
+
+            // Line-by-line navigation within blocks
+            Action::LineUp => {
+                if let Some(text) = self.get_block_text(self.state.content.cursor_block) {
+                    self.state.content.cursor_line_up(&text);
+                }
+                self.ensure_cursor_visible();
+                self.update_cursor_message();
+            }
+            Action::LineDown => {
+                if let Some(text) = self.get_block_text(self.state.content.cursor_block) {
+                    self.state.content.cursor_line_down(&text);
+                }
+                self.ensure_cursor_visible();
+                self.update_cursor_message();
+            }
+
+            _ => {}
+        }
+        Ok(false)
+    }
+
+    /// Enter cursor mode at the top of visible content
+    fn enter_cursor_mode(&mut self) {
+        // Find the first text block that's visible on screen
+        let first_visible = self.find_first_visible_text_block();
+        self.state.content.enter_cursor_mode(first_visible);
+        self.state.command_line.set_message("-- CURSOR -- (h/j/k/l to move, v to select, Esc to exit)");
+    }
+
+    /// Toggle between normal -> cursor mode -> visual mode
+    fn toggle_visual_mode(&mut self) {
+        if self.state.visual_mode.active {
+            // Exit visual mode back to cursor mode
+            self.state.visual_mode.exit();
+            self.state.command_line.set_message("-- CURSOR -- (h/j/k/l to move, v to select, Esc to exit)");
+        } else if self.state.content.cursor_mode {
+            // Already in cursor mode, start visual selection
+            self.state.visual_mode.enter(
+                self.state.content.cursor_block,
+                self.state.content.cursor_char,
+            );
+            self.state.command_line.set_message("-- VISUAL -- (move to select, a/Enter to annotate, v/Esc to cancel)");
+        } else {
+            // Enter cursor mode (navigation)
+            self.enter_cursor_mode();
+        }
+    }
+
+    /// Update the status message based on cursor/visual mode state
+    fn update_cursor_message(&mut self) {
+        if self.state.visual_mode.active {
+            let (sb, sc, eb, ec) = self.state.visual_mode.selection_range(
+                self.state.content.cursor_block,
+                self.state.content.cursor_char,
+            );
+            if sb == eb {
+                let len = ec.saturating_sub(sc);
+                self.state.command_line.set_message(format!(
+                    "-- VISUAL -- {} chars selected",
+                    len
+                ));
+            } else {
+                self.state.command_line.set_message(format!(
+                    "-- VISUAL -- blocks {}-{} selected",
+                    sb, eb
+                ));
+            }
+        } else {
+            self.state.command_line.set_message(format!(
+                "-- CURSOR -- block {}, char {}",
+                self.state.content.cursor_block,
+                self.state.content.cursor_char
+            ));
+        }
+    }
+
+    /// Ensure the cursor is visible by scrolling if needed
+    fn ensure_cursor_visible(&mut self) {
+        // Use the actual block line offsets computed during rendering
+        let cursor_block = self.state.content.cursor_block;
+        self.state.content.ensure_block_visible(cursor_block);
+    }
+
+    /// Check if a block is navigable (contains selectable text)
+    fn is_navigable_block(block: &crate::book::ContentBlock) -> bool {
+        matches!(
+            block,
+            crate::book::ContentBlock::Paragraph(_)
+                | crate::book::ContentBlock::Heading { .. }
+                | crate::book::ContentBlock::Blockquote(_)
+                | crate::book::ContentBlock::UnorderedList(_)
+                | crate::book::ContentBlock::OrderedList(_)
+                | crate::book::ContentBlock::Code(_)
+        )
+    }
+
+    /// Find the first text block that's currently visible
+    fn find_first_visible_text_block(&self) -> usize {
+        // Approximate: assume each block takes ~3 lines
+        let scroll_offset = self.state.content.scroll_offset;
+        let approx_block = scroll_offset / 3;
+
+        // Find the first navigable block at or after this position
+        let Some(book) = &self.state.book else { return 0 };
+        let Some(section) = book.get_section(self.state.current_chapter, self.state.current_section) else {
+            return 0;
+        };
+
+        section
+            .content
+            .iter()
+            .enumerate()
+            .skip(approx_block)
+            .find(|(_, b)| Self::is_navigable_block(b))
+            .map(|(i, _)| i)
+            .unwrap_or(0)
+    }
+
+    /// Find the index of the first navigable block
+    fn find_first_text_block_index(&self) -> usize {
+        let Some(book) = &self.state.book else { return 0 };
+        let Some(section) = book.get_section(self.state.current_chapter, self.state.current_section) else {
+            return 0;
+        };
+
+        section
+            .content
+            .iter()
+            .position(Self::is_navigable_block)
+            .unwrap_or(0)
+    }
+
+    /// Get the total number of content blocks in current section
+    fn get_block_count(&self) -> usize {
+        let Some(book) = &self.state.book else { return 0 };
+        let Some(section) = book.get_section(self.state.current_chapter, self.state.current_section) else {
+            return 0;
+        };
+        section.content.len()
+    }
+
+    /// Get the character count for a block
+    fn get_block_char_count(&self, block_index: usize) -> usize {
+        self.get_block_text(block_index).map(|t| t.chars().count()).unwrap_or(0)
+    }
+
+    /// Get the text content of a block
+    fn get_block_text(&self, block_index: usize) -> Option<String> {
+        let book = self.state.book.as_ref()?;
+        let section = book.get_section(self.state.current_chapter, self.state.current_section)?;
+
+        match section.content.get(block_index) {
+            Some(crate::book::ContentBlock::Paragraph(text)) => Some(text.clone()),
+            Some(crate::book::ContentBlock::Blockquote(text)) => Some(text.clone()),
+            Some(crate::book::ContentBlock::Heading { text, .. }) => Some(text.clone()),
+            Some(crate::book::ContentBlock::UnorderedList(items)) => {
+                // Combine all list items with newlines for navigation
+                Some(items.join("\n"))
+            }
+            Some(crate::book::ContentBlock::OrderedList(items)) => {
+                // Combine all list items with newlines for navigation
+                Some(items.join("\n"))
+            }
+            Some(crate::book::ContentBlock::Code(code)) => {
+                // Return the code content for navigation
+                Some(code.code.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Create a note from the current visual selection
+    fn create_note_from_selection(&mut self) {
+        use crate::notes::Note;
+
+        let Some(book) = &self.state.book else {
+            self.state.visual_mode.exit();
+            return;
+        };
+        let Some(section) = book.get_section(self.state.current_chapter, self.state.current_section) else {
+            self.state.visual_mode.exit();
+            return;
+        };
+
+        let (start_block, start_char, end_block, end_char) = self.state.visual_mode.selection_range(
+            self.state.content.cursor_block,
+            self.state.content.cursor_char,
+        );
+
+        // For simplicity, only support single-block selection for now
+        if start_block != end_block {
+            self.state.command_line.set_error("Multi-block selection not yet supported");
+            self.state.visual_mode.exit();
+            return;
+        }
+
+        // Extract the selected text
+        let selected_text = match section.content.get(start_block) {
+            Some(crate::book::ContentBlock::Paragraph(text)) => {
+                text.chars().skip(start_char).take(end_char - start_char).collect::<String>()
+            }
+            Some(crate::book::ContentBlock::Blockquote(text)) => {
+                text.chars().skip(start_char).take(end_char - start_char).collect::<String>()
+            }
+            Some(crate::book::ContentBlock::Heading { text, .. }) => {
+                text.chars().skip(start_char).take(end_char - start_char).collect::<String>()
+            }
+            _ => {
+                self.state.command_line.set_error("Cannot annotate this block type");
+                self.state.visual_mode.exit();
+                return;
+            }
+        };
+
+        if selected_text.is_empty() {
+            self.state.command_line.set_error("No text selected");
+            self.state.visual_mode.exit();
+            return;
+        }
+
+        // Create the note with anchor
+        let note = Note::new_selection_note(
+            &book.metadata.id,
+            &section.path,
+            "", // Empty content - user will edit
+            start_block,
+            start_char,
+            &selected_text,
+        );
+
+        let note_id = note.id.clone();
+        self.notes_store.add_note(note);
+
+        // Start editing the note content
+        self.state.notes.start_editing(&note_id, "");
+        self.state.panel_visibility.notes = true;
+        self.state.focused_panel = Panel::Notes;
+
+        // Exit visual mode
+        self.state.visual_mode.exit();
+        self.state.command_line.set_message(format!("Annotating: \"{}\"", truncate_str(&selected_text, 30)));
     }
 
     /// Mark current section as viewed
@@ -366,6 +790,133 @@ impl App {
         }
     }
 
+    /// Start creating a new note
+    fn start_creating_note(&mut self) {
+        // Only allow if we have a book loaded
+        let Some(book) = &self.state.book else {
+            self.state.command_line.set_error("No book loaded");
+            return;
+        };
+
+        // Check if we have a valid section
+        if book.chapters.get(self.state.current_chapter).is_none() {
+            self.state.command_line.set_error("No section selected");
+            return;
+        }
+
+        self.state.notes.start_creating();
+        // Show and focus the notes panel
+        self.state.panel_visibility.notes = true;
+        self.state.focused_panel = Panel::Notes;
+    }
+
+    /// Start editing the selected note
+    fn start_editing_note(&mut self) {
+        use crate::ui::notes_panel::get_selected_note;
+
+        let Some(note) = get_selected_note(&self.state, &self.notes_store) else {
+            self.state.command_line.set_error("No note selected");
+            return;
+        };
+
+        self.state.notes.start_editing(&note.id, &note.content);
+        self.state.panel_visibility.notes = true;
+        self.state.focused_panel = Panel::Notes;
+    }
+
+    /// Delete the selected note
+    fn delete_selected_note(&mut self) {
+        use crate::ui::notes_panel::get_selected_note;
+
+        let Some(note) = get_selected_note(&self.state, &self.notes_store) else {
+            self.state.command_line.set_error("No note selected");
+            return;
+        };
+
+        let note_id = note.id.clone();
+        if self.notes_store.delete_note(&note_id) {
+            if let Err(e) = self.notes_store.save() {
+                tracing::warn!("Failed to save notes: {}", e);
+            }
+            self.state.command_line.set_message("Note deleted");
+            // Reset selection if needed
+            let total = crate::ui::notes_panel::get_note_count(&self.state, &self.notes_store);
+            if self.state.notes.selected_index >= total && total > 0 {
+                self.state.notes.selected_index = total - 1;
+            }
+        }
+    }
+
+    /// Save the current note being created or edited
+    fn save_note(&mut self) {
+        use crate::notes::Note;
+
+        let content = self.state.notes.input.clone();
+        if content.trim().is_empty() {
+            self.state.notes.cancel_edit();
+            return;
+        }
+
+        if self.state.notes.creating {
+            // Create new note
+            let Some(book) = &self.state.book else {
+                self.state.notes.cancel_edit();
+                return;
+            };
+            let Some(chapter) = book.chapters.get(self.state.current_chapter) else {
+                self.state.notes.cancel_edit();
+                return;
+            };
+            let Some(section) = chapter.sections.get(self.state.current_section) else {
+                self.state.notes.cancel_edit();
+                return;
+            };
+
+            let note = Note::new_section_note(&book.metadata.id, &section.path, &content);
+            self.notes_store.add_note(note);
+
+            if let Err(e) = self.notes_store.save() {
+                tracing::warn!("Failed to save notes: {}", e);
+            }
+            self.state.command_line.set_message("Note created");
+        } else if let Some(note_id) = &self.state.notes.editing.clone() {
+            // Update existing note
+            if self.notes_store.update_note(note_id, &content) {
+                if let Err(e) = self.notes_store.save() {
+                    tracing::warn!("Failed to save notes: {}", e);
+                }
+                self.state.command_line.set_message("Note updated");
+            }
+        }
+
+        self.state.notes.cancel_edit();
+    }
+
+    /// Handle input while editing a note
+    fn handle_notes_input(&mut self, key: KeyCode) {
+        match key {
+            KeyCode::Esc => {
+                self.state.notes.cancel_edit();
+            }
+            KeyCode::Enter => {
+                self.save_note();
+            }
+            KeyCode::Backspace => {
+                self.state.notes.delete_char();
+            }
+            KeyCode::Left => {
+                self.state.notes.move_left();
+            }
+            KeyCode::Right => {
+                self.state.notes.move_right();
+            }
+            KeyCode::Char(c) => {
+                self.state.notes.insert_char(c);
+            }
+            _ => {}
+        }
+    }
+
     /// Move panel focus left
     fn move_panel_focus_left(&mut self) {
         match self.state.focused_panel {
@@ -401,7 +952,37 @@ impl App {
         match self.state.focused_panel {
             Panel::Curriculum => self.navigate_curriculum(action),
             Panel::Content => self.navigate_content(action),
-            Panel::Notes => {}
+            Panel::Notes => self.navigate_notes(action),
+        }
+    }
+
+    /// Navigate the notes panel
+    fn navigate_notes(&mut self, action: Action) {
+        use crate::ui::notes_panel::get_note_count;
+
+        let total_notes = get_note_count(&self.state, &self.notes_store);
+        if total_notes == 0 {
+            return;
+        }
+
+        match action {
+            Action::Up => {
+                if self.state.notes.selected_index > 0 {
+                    self.state.notes.selected_index -= 1;
+                }
+            }
+            Action::Down => {
+                if self.state.notes.selected_index < total_notes - 1 {
+                    self.state.notes.selected_index += 1;
+                }
+            }
+            Action::Top => {
+                self.state.notes.selected_index = 0;
+            }
+            Action::Bottom => {
+                self.state.notes.selected_index = total_notes.saturating_sub(1);
+            }
+            _ => {}
         }
     }
 
@@ -872,6 +1453,17 @@ impl App {
         }
 
         self.state.command_line.set_error(format!("Section not found: {}", path));
+    }
+}
+
+/// Truncate a string to a maximum length with ellipsis
+fn truncate_str(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else if max_len <= 3 {
+        "...".to_string()
+    } else {
+        format!("{}...", &s[..max_len - 3])
     }
 }
 

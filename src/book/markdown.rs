@@ -53,6 +53,7 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
     let mut current_heading_level: Option<u8> = None;
     let mut in_html_comment = false;
     let mut in_caption = false; // Track when inside <span class="caption">
+    let mut caption_content = String::new(); // Accumulate caption text
 
     for event in parser {
         match event {
@@ -256,9 +257,8 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
                 } else if in_blockquote {
                     blockquote_content.push_str(&text);
                 } else if in_caption {
-                    // Caption text becomes a heading (level 5)
-                    flush_text(&mut current_text, &mut blocks);
-                    blocks.push(ContentBlock::Heading { level: 5, text: text.to_string() });
+                    // Accumulate caption text (will become heading when caption ends)
+                    caption_content.push_str(&text);
                 } else {
                     current_text.push_str(&text);
                 }
@@ -278,6 +278,10 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
                     blockquote_content.push('`');
                     blockquote_content.push_str(&code);
                     blockquote_content.push('`');
+                } else if in_caption {
+                    caption_content.push('`');
+                    caption_content.push_str(&code);
+                    caption_content.push('`');
                 } else {
                     current_text.push('`');
                     current_text.push_str(&code);
@@ -288,6 +292,9 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
             Event::SoftBreak | Event::HardBreak => {
                 if in_code_block {
                     code_content.push('\n');
+                } else if in_caption {
+                    // Replace breaks with space in captions to keep them on one line
+                    caption_content.push(' ');
                 } else if in_list {
                     current_list_item.push(' ');
                 } else if in_blockquote {
@@ -324,6 +331,13 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
                     continue; // Skip content inside HTML comments
                 }
 
+                // Check for HTML <img> tags
+                if let Some(img_block) = parse_html_img_tag(html_str) {
+                    flush_text(&mut current_text, &mut blocks);
+                    blocks.push(img_block);
+                    continue;
+                }
+
                 // Check for caption/heading patterns (common in mdBook)
                 // Track entering/exiting caption spans
                 if html_str.contains("class=\"caption\"") || html_str.contains("class='caption'") {
@@ -332,6 +346,12 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
                 }
                 if in_caption && html_str.contains("</span>") {
                     in_caption = false;
+                    // Create heading from accumulated caption content
+                    if !caption_content.is_empty() {
+                        flush_text(&mut current_text, &mut blocks);
+                        blocks.push(ContentBlock::Heading { level: 5, text: caption_content.trim().to_string() });
+                        caption_content.clear();
+                    }
                     continue; // Skip the closing tag
                 }
 
@@ -384,6 +404,45 @@ fn flush_text(text: &mut String, blocks: &mut Vec<ContentBlock>) {
         blocks.push(ContentBlock::Paragraph(trimmed));
     }
     text.clear();
+}
+
+/// Parse an HTML img tag and return a ContentBlock::Image if found
+fn parse_html_img_tag(html: &str) -> Option<ContentBlock> {
+    // Check if this is an img tag
+    if !html.contains("<img") {
+        return None;
+    }
+
+    // Extract src attribute
+    let src = extract_html_attribute(html, "src")?;
+
+    // Extract alt attribute (optional)
+    let alt = extract_html_attribute(html, "alt").unwrap_or_default();
+
+    Some(ContentBlock::Image { src, alt })
+}
+
+/// Extract an attribute value from an HTML tag
+fn extract_html_attribute(html: &str, attr_name: &str) -> Option<String> {
+    // Try double quotes: attr="value"
+    let pattern_double = format!("{}=\"", attr_name);
+    if let Some(start_idx) = html.find(&pattern_double) {
+        let value_start = start_idx + pattern_double.len();
+        if let Some(end_offset) = html[value_start..].find('"') {
+            return Some(html[value_start..value_start + end_offset].to_string());
+        }
+    }
+
+    // Try single quotes: attr='value'
+    let pattern_single = format!("{}='", attr_name);
+    if let Some(start_idx) = html.find(&pattern_single) {
+        let value_start = start_idx + pattern_single.len();
+        if let Some(end_offset) = html[value_start..].find('\'') {
+            return Some(html[value_start..value_start + end_offset].to_string());
+        }
+    }
+
+    None
 }
 
 fn heading_level_to_u8(level: HeadingLevel) -> u8 {
@@ -1080,6 +1139,32 @@ fn main() {}
     }
 
     #[test]
+    fn parse_html_img_tag() {
+        let md = r#"Some text before.
+
+<img alt="Memory diagram" src="img/trpl04-01.svg" class="center" style="width: 50%;" />
+
+Some text after."#;
+        let blocks = parse_markdown_content(md);
+        let has_image = blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Image { src, alt } if src == "img/trpl04-01.svg" && alt == "Memory diagram"));
+        assert!(has_image, "Expected HTML img block, got {:?}", blocks);
+    }
+
+    #[test]
+    fn parse_html_img_tag_multiline() {
+        // The Rust book has img tags that span multiple lines
+        let md = r#"<img alt="Two tables" src="img/trpl04-01.svg" class="center"
+style="width: 50%;" />"#;
+        let blocks = parse_markdown_content(md);
+        let has_image = blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Image { src, .. } if src == "img/trpl04-01.svg"));
+        assert!(has_image, "Expected multiline HTML img block, got {:?}", blocks);
+    }
+
+    #[test]
     fn parse_empty_content() {
         let blocks = parse_markdown_content("");
         assert!(blocks.is_empty());
@@ -1363,6 +1448,28 @@ Let's say you have a variable."#;
             );
         } else {
             panic!("Expected blockquote, got {:?}", blocks[0]);
+        }
+    }
+
+    #[test]
+    fn caption_with_inline_code_on_one_line() {
+        // Figure captions like in the Rust book should render on a single line
+        let md = r#"<span class="caption">Figure 4-1: The representation in memory of a `String`
+holding the value `"hello"` bound to `s1`</span>"#;
+        let blocks = parse_markdown_content(md);
+
+        assert_eq!(blocks.len(), 1, "Expected 1 block, got {:?}", blocks);
+
+        if let ContentBlock::Heading { level: 5, text } = &blocks[0] {
+            // Caption should be on one line with inline code preserved
+            assert!(text.contains("Figure 4-1"), "Expected Figure 4-1, got: {}", text);
+            assert!(text.contains("`String`"), "Expected `String` inline code, got: {}", text);
+            assert!(text.contains("`\"hello\"`"), "Expected `\"hello\"` inline code, got: {}", text);
+            assert!(text.contains("`s1`"), "Expected `s1` inline code, got: {}", text);
+            // Soft breaks should be converted to spaces, not newlines
+            assert!(!text.contains('\n'), "Caption should be on one line, got: {}", text);
+        } else {
+            panic!("Expected heading, got {:?}", blocks[0]);
         }
     }
 }
