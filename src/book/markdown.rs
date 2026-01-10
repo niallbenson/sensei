@@ -52,6 +52,7 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
 
     let mut current_heading_level: Option<u8> = None;
     let mut in_html_comment = false;
+    let mut in_caption = false; // Track when inside <span class="caption">
 
     for event in parser {
         match event {
@@ -211,6 +212,10 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
                     current_list_item.push_str(&text);
                 } else if in_blockquote {
                     blockquote_content.push_str(&text);
+                } else if in_caption {
+                    // Caption text becomes a heading (level 5)
+                    flush_text(&mut current_text, &mut blocks);
+                    blocks.push(ContentBlock::Heading { level: 5, text: text.to_string() });
                 } else {
                     current_text.push_str(&text);
                 }
@@ -274,6 +279,17 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
                 }
                 if in_html_comment {
                     continue; // Skip content inside HTML comments
+                }
+
+                // Check for caption/heading patterns (common in mdBook)
+                // Track entering/exiting caption spans
+                if html_str.contains("class=\"caption\"") || html_str.contains("class='caption'") {
+                    in_caption = true;
+                    continue; // Skip the opening tag itself
+                }
+                if in_caption && html_str.contains("</span>") {
+                    in_caption = false;
+                    continue; // Skip the closing tag
                 }
 
                 // Extract any visible text from HTML, skip tags
@@ -1252,6 +1268,31 @@ after"#;
             result.contains("Path traversal blocked"),
             "Should block hidden .. in path, got: {}",
             result
+        );
+    }
+
+    #[test]
+    fn html_caption_becomes_heading() {
+        let md = r#"<span class="caption">Integer Overflow</span>
+
+Let's say you have a variable."#;
+        let blocks = parse_markdown_content(md);
+
+        // Should have a heading for the caption and a paragraph for the text
+        assert!(blocks.len() >= 2, "Expected at least 2 blocks, got {:?}", blocks);
+
+        // First block should be a heading with the caption text
+        assert!(
+            matches!(&blocks[0], ContentBlock::Heading { level: 5, text } if text == "Integer Overflow"),
+            "Expected heading with 'Integer Overflow', got {:?}",
+            blocks[0]
+        );
+
+        // Second block should be the paragraph
+        assert!(
+            matches!(&blocks[1], ContentBlock::Paragraph(text) if text.contains("variable")),
+            "Expected paragraph with 'variable', got {:?}",
+            blocks[1]
         );
     }
 }
