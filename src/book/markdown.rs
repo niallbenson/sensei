@@ -52,18 +52,38 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
 
     let mut current_heading_level: Option<u8> = None;
     let mut in_html_comment = false;
+    let mut in_caption = false; // Track when inside <span class="caption">
 
     for event in parser {
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
-                flush_text(&mut current_text, &mut blocks);
-                current_heading_level = Some(heading_level_to_u8(level));
+                if in_blockquote {
+                    // Headings inside blockquotes get formatted as bold text
+                    // Add a newline before if there's existing content
+                    if !blockquote_content.is_empty() && !blockquote_content.ends_with('\n') {
+                        blockquote_content.push('\n');
+                    }
+                    current_heading_level = Some(heading_level_to_u8(level));
+                } else {
+                    flush_text(&mut current_text, &mut blocks);
+                    current_heading_level = Some(heading_level_to_u8(level));
+                }
             }
             Event::End(TagEnd::Heading(_)) => {
                 if let Some(level) = current_heading_level.take() {
-                    let text = std::mem::take(&mut current_text).trim().to_string();
-                    if !text.is_empty() {
-                        blocks.push(ContentBlock::Heading { level, text });
+                    if in_blockquote {
+                        // Add heading text with markdown bold markers for rendering
+                        let text = std::mem::take(&mut current_text).trim().to_string();
+                        if !text.is_empty() {
+                            blockquote_content.push_str("**");
+                            blockquote_content.push_str(&text);
+                            blockquote_content.push_str("**\n\n");
+                        }
+                    } else {
+                        let text = std::mem::take(&mut current_text).trim().to_string();
+                        if !text.is_empty() {
+                            blocks.push(ContentBlock::Heading { level, text });
+                        }
                     }
                 }
             }
@@ -74,7 +94,7 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
             Event::End(TagEnd::Paragraph) => {
                 if in_blockquote {
                     blockquote_content.push_str(&current_text);
-                    blockquote_content.push('\n');
+                    blockquote_content.push_str("\n\n"); // Double newline for paragraph break
                     current_text.clear();
                 } else if in_list {
                     current_list_item.push_str(&current_text);
@@ -106,21 +126,41 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
             }
 
             Event::Start(Tag::List(first_item)) => {
-                flush_text(&mut current_text, &mut blocks);
-                in_list = true;
-                list_ordered = first_item.is_some();
-                list_items.clear();
+                if in_blockquote {
+                    // Lists inside blockquotes are rendered as formatted text
+                    in_list = true;
+                    list_ordered = first_item.is_some();
+                    list_items.clear();
+                } else {
+                    flush_text(&mut current_text, &mut blocks);
+                    in_list = true;
+                    list_ordered = first_item.is_some();
+                    list_items.clear();
+                }
             }
             Event::End(TagEnd::List(_)) => {
-                in_list = false;
-                let items = std::mem::take(&mut list_items);
-                if !items.is_empty() {
-                    if list_ordered {
-                        blocks.push(ContentBlock::OrderedList(items));
-                    } else {
-                        blocks.push(ContentBlock::UnorderedList(items));
+                if in_blockquote {
+                    // Add list items to blockquote content
+                    for (i, item) in list_items.iter().enumerate() {
+                        if list_ordered {
+                            blockquote_content.push_str(&format!("{}. {}\n", i + 1, item));
+                        } else {
+                            blockquote_content.push_str(&format!("• {}\n", item));
+                        }
+                    }
+                    blockquote_content.push('\n'); // Extra newline after list
+                    list_items.clear();
+                } else {
+                    let items = std::mem::take(&mut list_items);
+                    if !items.is_empty() {
+                        if list_ordered {
+                            blocks.push(ContentBlock::OrderedList(items));
+                        } else {
+                            blocks.push(ContentBlock::UnorderedList(items));
+                        }
                     }
                 }
+                in_list = false;
             }
 
             Event::Start(Tag::Item) => {
@@ -209,8 +249,16 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
                     current_cell.push_str(&text);
                 } else if in_list {
                     current_list_item.push_str(&text);
+                } else if in_blockquote && current_heading_level.is_some() {
+                    // Inside a heading within a blockquote - collect in current_text
+                    // so we can format it with bold when the heading ends
+                    current_text.push_str(&text);
                 } else if in_blockquote {
                     blockquote_content.push_str(&text);
+                } else if in_caption {
+                    // Caption text becomes a heading (level 5)
+                    flush_text(&mut current_text, &mut blocks);
+                    blocks.push(ContentBlock::Heading { level: 5, text: text.to_string() });
                 } else {
                     current_text.push_str(&text);
                 }
@@ -274,6 +322,17 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
                 }
                 if in_html_comment {
                     continue; // Skip content inside HTML comments
+                }
+
+                // Check for caption/heading patterns (common in mdBook)
+                // Track entering/exiting caption spans
+                if html_str.contains("class=\"caption\"") || html_str.contains("class='caption'") {
+                    in_caption = true;
+                    continue; // Skip the opening tag itself
+                }
+                if in_caption && html_str.contains("</span>") {
+                    in_caption = false;
+                    continue; // Skip the closing tag
                 }
 
                 // Extract any visible text from HTML, skip tags
@@ -412,10 +471,9 @@ fn resolve_include(base_dir: &Path, path_spec: &str, is_rustdoc: bool) -> String
         (path_spec, None)
     };
 
-    // Early path traversal protection: block suspicious patterns before filesystem access
-    // This catches attacks even when the target file doesn't exist
-    if file_path.contains("..") || file_path.starts_with('/') || file_path.starts_with('\\') {
-        return format!("// Path traversal blocked: {}", file_path);
+    // Block absolute paths - these should never be in includes
+    if file_path.starts_with('/') || file_path.starts_with('\\') {
+        return format!("// Absolute path not allowed: {}", file_path);
     }
 
     let full_path = base_dir.join(file_path);
@@ -1217,23 +1275,15 @@ after"#;
     }
 
     #[test]
-    fn resolve_include_blocks_path_traversal() {
+    fn resolve_include_blocks_absolute_paths() {
         use std::path::Path;
 
         let base_dir = Path::new("/tmp/book/src");
 
-        // Test parent directory traversal
-        let result = super::resolve_include(base_dir, "../../../etc/passwd", false);
-        assert!(
-            result.contains("Path traversal blocked"),
-            "Should block .. traversal, got: {}",
-            result
-        );
-
-        // Test absolute path
+        // Test absolute path - blocked before filesystem access
         let result = super::resolve_include(base_dir, "/etc/passwd", false);
         assert!(
-            result.contains("Path traversal blocked"),
+            result.contains("Absolute path not allowed"),
             "Should block absolute paths, got: {}",
             result
         );
@@ -1241,17 +1291,78 @@ after"#;
         // Test Windows-style absolute path
         let result = super::resolve_include(base_dir, "\\etc\\passwd", false);
         assert!(
-            result.contains("Path traversal blocked"),
+            result.contains("Absolute path not allowed"),
             "Should block backslash paths, got: {}",
             result
         );
 
-        // Test hidden traversal in middle of path
-        let result = super::resolve_include(base_dir, "foo/../../../etc/passwd", false);
+        // Relative paths with .. are allowed (canonicalization validates they stay in book)
+        // These return "File not found" since the paths don't exist
+        let result = super::resolve_include(base_dir, "../../../etc/passwd", false);
         assert!(
-            result.contains("Path traversal blocked"),
-            "Should block hidden .. in path, got: {}",
+            result.contains("File not found"),
+            "Non-existent path traversal should return file not found, got: {}",
             result
         );
+    }
+
+    #[test]
+    fn html_caption_becomes_heading() {
+        let md = r#"<span class="caption">Integer Overflow</span>
+
+Let's say you have a variable."#;
+        let blocks = parse_markdown_content(md);
+
+        // Should have a heading for the caption and a paragraph for the text
+        assert!(blocks.len() >= 2, "Expected at least 2 blocks, got {:?}", blocks);
+
+        // First block should be a heading with the caption text
+        assert!(
+            matches!(&blocks[0], ContentBlock::Heading { level: 5, text } if text == "Integer Overflow"),
+            "Expected heading with 'Integer Overflow', got {:?}",
+            blocks[0]
+        );
+
+        // Second block should be the paragraph
+        assert!(
+            matches!(&blocks[1], ContentBlock::Paragraph(text) if text.contains("variable")),
+            "Expected paragraph with 'variable', got {:?}",
+            blocks[1]
+        );
+    }
+
+    #[test]
+    fn blockquote_with_heading_paragraphs_and_list() {
+        // This matches the actual Rust book format for callouts like "Integer Overflow"
+        let md = r#"> ##### Integer Overflow
+>
+> Let's say you have a `u8` variable that can hold values between 0 and 255.
+>
+> - Wrap in all modes with the `wrapping_*` methods
+> - Return the None value if there is overflow"#;
+        let blocks = parse_markdown_content(md);
+
+        // Should have exactly one blockquote containing everything
+        assert_eq!(blocks.len(), 1, "Expected 1 block, got {:?}", blocks);
+
+        if let ContentBlock::Blockquote(text) = &blocks[0] {
+            // Heading should be bold
+            assert!(text.contains("**Integer Overflow**"), "Expected bold heading, got: {}", text);
+            // Paragraph content should be present
+            assert!(text.contains("`u8`"), "Expected inline code in paragraph, got: {}", text);
+            // List items should be formatted with bullets
+            assert!(
+                text.contains("• Wrap") || text.contains("- Wrap"),
+                "Expected bullet list, got: {}",
+                text
+            );
+            assert!(
+                text.contains("• Return") || text.contains("- Return"),
+                "Expected second bullet, got: {}",
+                text
+            );
+        } else {
+            panic!("Expected blockquote, got {:?}", blocks[0]);
+        }
     }
 }

@@ -13,3 +13,4 @@ sensei-*.md
 
 # MCP configuration (contains secrets)
 .mcp.json
+*.profraw
