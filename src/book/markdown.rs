@@ -13,6 +13,7 @@ use super::model::{
 };
 
 /// Parse a markdown string into content blocks
+// skipcq: RS-R1000 - Parser functions inherently have high cyclomatic complexity
 #[allow(clippy::cognitive_complexity)]
 pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
     let options = Options::ENABLE_TABLES

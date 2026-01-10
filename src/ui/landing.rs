@@ -209,6 +209,7 @@ mod tests {
     #[test]
     fn build_enso_empty_at_zero() {
         let enso = build_enso(0.0);
+        // skipcq: RS-W1049 - filter is appropriate here for predicate-based counting
         let non_space: usize = enso.chars().filter(|c| !c.is_whitespace()).count();
         assert_eq!(non_space, 0);
     }
@@ -216,6 +217,7 @@ mod tests {
     #[test]
     fn build_enso_full_at_one() {
         let enso = build_enso(1.0);
+        // skipcq: RS-W1049 - filter is appropriate here for predicate-based counting
         let non_space: usize = enso.chars().filter(|c| !c.is_whitespace()).count();
         assert_eq!(non_space, ENSO_PATH.len());
     }
@@ -223,6 +225,7 @@ mod tests {
     #[test]
     fn build_enso_partial() {
         let enso = build_enso(0.5);
+        // skipcq: RS-W1049 - filter is appropriate here for predicate-based counting
         let non_space: usize = enso.chars().filter(|c| !c.is_whitespace()).count();
         assert!(non_space > 0);
         assert!(non_space < ENSO_PATH.len());

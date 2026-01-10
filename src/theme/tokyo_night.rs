@@ -7,7 +7,7 @@ use super::Theme;
 /// Tokyo Night color palette
 #[allow(clippy::declare_interior_mutable_const)]
 pub const TOKYO_NIGHT: Theme = Theme {
-    // Note: String::new() is required in const context, name is set via tokyo_night() fn
+    // skipcq: RS-W1079 - String::new() required in const context, name set via tokyo_night() fn
     name: String::new(),
 
     // Background colors

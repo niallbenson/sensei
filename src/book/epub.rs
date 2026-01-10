@@ -244,6 +244,7 @@ fn xhtml_to_markdown(xhtml: &str) -> String {
 }
 
 /// Process an HTML tag and convert to markdown
+// skipcq: RS-R1000 - HTML tag processing inherently has high cyclomatic complexity
 #[allow(clippy::cognitive_complexity)]
 fn process_tag(tag: &str, output: &mut String, tag_stack: &mut Vec<String>) {
     let tag_lower = tag.to_lowercase();
