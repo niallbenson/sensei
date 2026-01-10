@@ -29,6 +29,14 @@ pub fn vim_key_to_action(key: KeyCode) -> Option<Action> {
         // Panel resize
         KeyCode::Char('<') => Some(Action::DecreasePanelWidth),
         KeyCode::Char('>') => Some(Action::IncreasePanelWidth),
+        // Notes
+        KeyCode::Char('a') => Some(Action::CreateNote),
+        KeyCode::Char('e') => Some(Action::EditNote),
+        KeyCode::Char('x') => Some(Action::DeleteNote),
+        // Word motions (primarily for visual mode)
+        KeyCode::Char('w') => Some(Action::WordForward),
+        KeyCode::Char('b') => Some(Action::WordBackward),
+        KeyCode::Char('E') => Some(Action::WordEnd),
         _ => None,
     }
 }
@@ -41,6 +49,12 @@ pub fn key_with_modifier_to_action(key: KeyCode, modifiers: KeyModifiers) -> Opt
             KeyCode::Char('u') => Some(Action::HalfPageUp),
             KeyCode::Char('f') => Some(Action::PageDown),
             KeyCode::Char('b') => Some(Action::PageUp),
+            // Line-by-line navigation within blocks
+            // Note: Ctrl+J may be interpreted as Enter in some terminals
+            KeyCode::Char('j') | KeyCode::Enter => Some(Action::LineDown),
+            KeyCode::Char('k') => Some(Action::LineUp),
+            KeyCode::Char('n') => Some(Action::LineDown),
+            KeyCode::Char('p') => Some(Action::LineUp),
             _ => None,
         }
     } else {
@@ -81,10 +95,24 @@ pub enum Action {
     // Progress
     MarkComplete,
 
+    // Notes
+    CreateNote,
+    EditNote,
+    DeleteNote,
+
     // Modes
     VisualMode,
     Help,
     Quit,
+
+    // Word motions (for visual mode)
+    WordForward,
+    WordBackward,
+    WordEnd,
+
+    // Line motions (for cursor mode within blocks)
+    LineUp,
+    LineDown,
 }
 
 #[cfg(test)]
@@ -103,7 +131,7 @@ mod tests {
 
     #[test]
     fn unknown_key_returns_none() {
-        assert_eq!(vim_key_to_action(KeyCode::Char('x')), None);
+        assert_eq!(vim_key_to_action(KeyCode::Char('z')), None);
     }
 
     #[test]
@@ -243,5 +271,35 @@ mod tests {
     fn arrow_keys_work() {
         assert_eq!(vim_key_to_action(KeyCode::Down), Some(Action::Down));
         assert_eq!(vim_key_to_action(KeyCode::Up), Some(Action::Up));
+    }
+
+    #[test]
+    fn a_maps_to_create_note() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('a')), Some(Action::CreateNote));
+    }
+
+    #[test]
+    fn e_maps_to_edit_note() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('e')), Some(Action::EditNote));
+    }
+
+    #[test]
+    fn x_maps_to_delete_note() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('x')), Some(Action::DeleteNote));
+    }
+
+    #[test]
+    fn w_maps_to_word_forward() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('w')), Some(Action::WordForward));
+    }
+
+    #[test]
+    fn b_maps_to_word_backward() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('b')), Some(Action::WordBackward));
+    }
+
+    #[test]
+    fn shift_e_maps_to_word_end() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('E')), Some(Action::WordEnd));
     }
 }

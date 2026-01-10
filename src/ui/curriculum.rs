@@ -57,7 +57,9 @@ pub fn draw_with_progress(
     let width = inner.width as usize;
 
     // Build curriculum tree with text wrapping
+    // Track the starting line index for each item so we can scroll to keep selection visible
     let mut lines: Vec<Line> = Vec::new();
+    let mut item_line_starts: Vec<usize> = Vec::new(); // Line index where each item starts
     let mut flat_index = 0;
 
     for (chapter_idx, chapter) in book.chapters.iter().enumerate() {
@@ -81,22 +83,31 @@ pub fn draw_with_progress(
             Style::default().fg(theme.fg_primary)
         };
 
-        // Wrap the chapter title
+        // Track where this chapter starts in the lines list
+        item_line_starts.push(lines.len());
+
+        // Wrap the chapter title and apply inline code styling to each line
+        // When selected, use a readable color for code; otherwise use accent color
+        let code_style = if is_chapter_selected && focused {
+            chapter_style.fg(theme.syntax_string) // Readable on selection background
+        } else {
+            Style::default().fg(theme.accent_secondary).add_modifier(Modifier::BOLD)
+        };
         let wrapped_lines = wrap_with_indent(&chapter.title, width, prefix.len());
+
+        let mut in_code = false;
         for (i, line_text) in wrapped_lines.iter().enumerate() {
-            if i == 0 {
-                lines.push(Line::from(Span::styled(
-                    format!("{}{}", prefix, line_text),
-                    chapter_style,
-                )));
+            let mut line_spans = if i == 0 {
+                vec![Span::styled(prefix.clone(), chapter_style)]
             } else {
-                // Continuation lines with indent
                 let indent = " ".repeat(prefix.len());
-                lines.push(Line::from(Span::styled(
-                    format!("{}{}", indent, line_text),
-                    chapter_style,
-                )));
-            }
+                vec![Span::styled(indent, chapter_style)]
+            };
+            let (spans, new_in_code) =
+                parse_inline_code_spans_with_state(line_text, chapter_style, code_style, in_code);
+            line_spans.extend(spans);
+            in_code = new_in_code;
+            lines.push(Line::from(line_spans));
         }
         flat_index += 1;
 
@@ -131,36 +142,104 @@ pub fn draw_with_progress(
                     Style::default().fg(theme.fg_secondary)
                 };
 
-                // Wrap the section title
+                // Track where this section starts in the lines list
+                item_line_starts.push(lines.len());
+
+                // Wrap the section title and apply inline code styling to each line
+                // When selected, use a readable color for code; otherwise use accent color
+                let code_style = if is_section_selected && focused {
+                    section_style.fg(theme.syntax_string) // Readable on selection background
+                } else {
+                    Style::default().fg(theme.accent_primary).add_modifier(Modifier::BOLD)
+                };
                 let wrapped_lines = wrap_with_indent(&section.title, width, section_prefix.len());
+
+                let mut in_code = false;
                 for (i, line_text) in wrapped_lines.iter().enumerate() {
-                    if i == 0 {
-                        lines.push(Line::from(Span::styled(
-                            format!("{}{}", section_prefix, line_text),
-                            section_style,
-                        )));
+                    let mut line_spans = if i == 0 {
+                        vec![Span::styled(section_prefix.clone(), section_style)]
                     } else {
-                        // Continuation lines with indent
                         let indent = " ".repeat(section_prefix.len());
-                        lines.push(Line::from(Span::styled(
-                            format!("{}{}", indent, line_text),
-                            section_style,
-                        )));
-                    }
+                        vec![Span::styled(indent, section_style)]
+                    };
+                    let (spans, new_in_code) = parse_inline_code_spans_with_state(
+                        line_text,
+                        section_style,
+                        code_style,
+                        in_code,
+                    );
+                    line_spans.extend(spans);
+                    in_code = new_in_code;
+                    lines.push(Line::from(line_spans));
                 }
                 flat_index += 1;
             }
         }
     }
 
-    // Handle scroll offset
+    // Handle scroll offset - ensure selected item is visible
     let visible_height = inner.height as usize;
+
+    // Find the line position of the selected item
+    if let Some(&selected_line) = item_line_starts.get(state.curriculum.selected_index) {
+        // Calculate how many lines this item takes (until next item or end)
+        let next_item_line = item_line_starts
+            .get(state.curriculum.selected_index + 1)
+            .copied()
+            .unwrap_or(lines.len());
+        let item_height = next_item_line - selected_line;
+
+        // Scroll up if selected item is above visible area
+        if selected_line < state.curriculum.scroll_offset {
+            state.curriculum.scroll_offset = selected_line;
+        }
+        // Scroll down if selected item is below visible area
+        else if selected_line + item_height > state.curriculum.scroll_offset + visible_height {
+            state.curriculum.scroll_offset =
+                (selected_line + item_height).saturating_sub(visible_height);
+        }
+    }
+
     let start = state.curriculum.scroll_offset;
     let end = (start + visible_height).min(lines.len());
     let visible_lines: Vec<Line> = lines.into_iter().skip(start).take(end - start).collect();
 
     let curriculum = Paragraph::new(visible_lines);
     frame.render_widget(curriculum, inner);
+}
+
+/// Parse text with backticks and return styled spans (for curriculum display)
+/// Also returns whether we ended inside a code block (for multi-line handling)
+fn parse_inline_code_spans_with_state(
+    text: &str,
+    base_style: Style,
+    code_style: Style,
+    start_in_code: bool,
+) -> (Vec<Span<'static>>, bool) {
+    let mut spans = Vec::new();
+    let mut in_code = start_in_code;
+    let mut current = String::new();
+
+    for c in text.chars() {
+        if c == '`' {
+            if !current.is_empty() {
+                let style = if in_code { code_style } else { base_style };
+                spans.push(Span::styled(current.clone(), style));
+                current.clear();
+            }
+            in_code = !in_code;
+        } else {
+            current.push(c);
+        }
+    }
+
+    // Don't forget remaining text
+    if !current.is_empty() {
+        let style = if in_code { code_style } else { base_style };
+        spans.push(Span::styled(current, style));
+    }
+
+    (spans, in_code)
 }
 
 /// Wrap text with a given indent for continuation lines

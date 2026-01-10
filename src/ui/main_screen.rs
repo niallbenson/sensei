@@ -3,20 +3,26 @@
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::Style,
-    widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use super::{command_line, content, curriculum};
+use super::{command_line, content, curriculum, image::ImageCache, notes_panel};
 use crate::app::state::{AppState, Panel};
 use crate::config::progress::Progress;
+use crate::notes::NotesStore;
 use crate::theme::Theme;
 
 /// Minimum width for the curriculum panel
 const CURRICULUM_MIN_WIDTH: u16 = 20;
 
 /// Draw the main reading screen
-pub fn draw(frame: &mut Frame, state: &mut AppState, theme: &Theme, progress: &Progress) {
+pub fn draw(
+    frame: &mut Frame,
+    state: &mut AppState,
+    theme: &Theme,
+    progress: &Progress,
+    notes_store: &NotesStore,
+    image_cache: &mut ImageCache,
+) {
     let area = frame.area();
 
     // Split vertically: main area and command line
@@ -52,6 +58,8 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, theme: &Theme, progress: &P
         state,
         theme,
         state.focused_panel == Panel::Content,
+        notes_store,
+        image_cache,
     );
     panel_index += 1;
 
@@ -62,6 +70,7 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, theme: &Theme, progress: &P
             state,
             theme,
             state.focused_panel == Panel::Notes,
+            notes_store,
         );
     }
 
@@ -113,34 +122,22 @@ fn draw_content_panel(
     state: &mut AppState,
     theme: &Theme,
     focused: bool,
+    notes_store: &NotesStore,
+    image_cache: &mut ImageCache,
 ) {
-    content::draw(frame, area, state, theme, focused);
+    content::draw_with_images(frame, area, state, theme, focused, Some(notes_store), image_cache);
 }
 
 /// Draw the notes (right) panel
 fn draw_notes_panel(
     frame: &mut Frame,
     area: Rect,
-    _state: &AppState,
+    state: &mut AppState,
     theme: &Theme,
     focused: bool,
+    notes_store: &NotesStore,
 ) {
-    let border_color = if focused { theme.border_focused } else { theme.border };
-
-    let block = Block::default()
-        .title(" Notes ")
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color))
-        .style(Style::default().bg(theme.bg_primary));
-
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    // Placeholder for notes
-    let msg = Paragraph::new("Notes coming soon...\n\nPress ] to toggle this panel")
-        .style(Style::default().fg(theme.fg_muted))
-        .wrap(Wrap { trim: true });
-    frame.render_widget(msg, inner);
+    notes_panel::draw(frame, area, state, theme, focused, notes_store);
 }
 
 #[cfg(test)]
