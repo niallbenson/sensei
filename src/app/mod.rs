@@ -1320,6 +1320,10 @@ impl App {
                 self.ask_claude(&question);
                 Ok(false)
             }
+            Command::Explain(topic) => {
+                self.explain_section(topic.as_deref());
+                Ok(false)
+            }
         }
     }
 
@@ -1356,6 +1360,91 @@ impl App {
         let messages = vec![crate::claude::Message::user(question)];
         let request = crate::claude::CreateMessageRequest::new(self.state.claude.model, messages)
             .with_system("You are a helpful assistant for a book reader application. Answer questions concisely.");
+
+        // Create channel and cancellation token
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+
+        self.claude_rx = Some(rx);
+        self.claude_cancel = Some(cancel_token.clone());
+
+        // Spawn the streaming task
+        tokio::spawn(async move {
+            if let Err(e) = client.send_streaming(request, tx, cancel_token).await {
+                tracing::error!("Claude API error: {}", e);
+            }
+        });
+    }
+
+    /// Explain the current section using Claude
+    fn explain_section(&mut self, topic: Option<&str>) {
+        // Check if already streaming
+        if self.state.claude.streaming {
+            self.state.command_line.set_error("Already waiting for Claude response");
+            return;
+        }
+
+        // Check for API key
+        if self.state.claude.needs_setup {
+            self.state.command_line.set_error("API key not set. Use :claude-key <key>");
+            return;
+        }
+
+        // Get current section content
+        let Some(book) = &self.state.book else {
+            self.state.command_line.set_error("No book loaded");
+            return;
+        };
+
+        let Some(section) =
+            book.get_section(self.state.current_chapter, self.state.current_section)
+        else {
+            self.state.command_line.set_error("No section selected");
+            return;
+        };
+
+        let section_title = section.title.clone();
+        let section_content = section.plain_text();
+
+        // Truncate content if too long (Claude has context limits)
+        let content = if section_content.len() > 8000 {
+            format!("{}...\n\n[Content truncated]", &section_content[..8000])
+        } else {
+            section_content
+        };
+
+        // Get API key
+        let api_key = match crate::claude::ApiKeyManager::get_api_key() {
+            Ok(key) => key,
+            Err(e) => {
+                self.state.command_line.set_error(format!("Failed to get API key: {}", e));
+                return;
+            }
+        };
+
+        // Build the prompt
+        let prompt = if let Some(focus) = topic {
+            format!(
+                "Here is a section from a book titled \"{}\":\n\n{}\n\nPlease explain {} in this context. Be concise.",
+                section_title, content, focus
+            )
+        } else {
+            format!(
+                "Here is a section from a book titled \"{}\":\n\n{}\n\nPlease provide a brief explanation of the key concepts in this section. Be concise.",
+                section_title, content
+            )
+        };
+
+        // Clear previous response and set streaming state
+        self.state.claude.clear_streaming();
+        self.state.claude.streaming = true;
+        self.state.command_line.set_message("Asking Claude to explain...");
+
+        // Create the client and message
+        let client = crate::claude::ClaudeClient::new(api_key);
+        let messages = vec![crate::claude::Message::user(&prompt)];
+        let request = crate::claude::CreateMessageRequest::new(self.state.claude.model, messages)
+            .with_system("You are an expert tutor helping someone understand technical content from a book. Explain concepts clearly and concisely.");
 
         // Create channel and cancellation token
         let (tx, rx) = tokio::sync::mpsc::channel(100);
