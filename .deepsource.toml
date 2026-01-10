@@ -7,6 +7,29 @@ exclude_patterns = [
   "**/*_test.rs",
 ]
 
+# Ignore complexity issues for parser functions that are inherently complex
+[[exclude]]
+files = [
+  "src/book/markdown.rs",
+  "src/book/epub.rs",
+]
+rules = ["RS-R1000"]
+
+# Ignore String::new() in const context where String::default() cannot be used
+[[exclude]]
+files = ["src/theme/tokyo_night.rs"]
+rules = ["RS-W1079"]
+
+# Ignore chars().filter() in test code
+[[exclude]]
+files = ["src/ui/landing.rs"]
+rules = ["RS-W1049"]
+
+# False positive - no unit value is actually passed
+[[exclude]]
+files = ["src/book/storage.rs"]
+rules = ["RS-E1015"]
+
 [[analyzers]]
 name = "rust"
 enabled = true
