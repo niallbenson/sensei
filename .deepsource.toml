@@ -3,6 +3,8 @@ version = 1
 exclude_patterns = [
   "target/**",
   "**/tests/**",
+  "**/test_*.rs",
+  "**/*_test.rs",
 ]
 
 [[analyzers]]

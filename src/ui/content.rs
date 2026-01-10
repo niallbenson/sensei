@@ -265,7 +265,7 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     }
 
     let mut result = Vec::new();
-    let mut current_line = String::new();
+    let mut current_line = String::default();
 
     for word in text.split_whitespace() {
         if current_line.is_empty() {
@@ -284,7 +284,7 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     }
 
     if result.is_empty() {
-        result.push(String::new());
+        result.push(String::default());
     }
 
     result
