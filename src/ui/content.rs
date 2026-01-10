@@ -98,10 +98,12 @@ fn draw_scrollbar(
     let visible_ratio = (height as f64 / total_lines as f64).min(1.0);
     let thumb_height = ((height as f64 * visible_ratio).ceil() as usize).max(1);
 
-    let scroll_ratio = if total_lines <= height {
+    // Calculate max scroll position to avoid division by zero
+    let max_scroll = total_lines.saturating_sub(height / 2);
+    let scroll_ratio = if total_lines <= height || max_scroll == 0 {
         0.0
     } else {
-        scroll_offset as f64 / (total_lines - height / 2) as f64
+        scroll_offset as f64 / max_scroll as f64
     };
     let thumb_top = ((height - thumb_height) as f64 * scroll_ratio).round() as usize;
 
@@ -120,7 +122,7 @@ fn draw_scrollbar(
 
         frame.render_widget(
             Paragraph::new(ch).style(style),
-            Rect { x, y: y + i as u16, width: 1, height: 1 },
+            Rect { x, y: y.saturating_add(i as u16), width: 1, height: 1 },
         );
     }
 }

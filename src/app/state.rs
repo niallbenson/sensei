@@ -181,9 +181,20 @@ impl CommandLineState {
         self.message = None;
     }
 
-    /// Insert a character at cursor
+    /// Convert character index to byte index
+    fn char_to_byte_index(&self, char_idx: usize) -> usize {
+        self.input.char_indices().nth(char_idx).map(|(i, _)| i).unwrap_or(self.input.len())
+    }
+
+    /// Get the number of characters in input
+    fn char_count(&self) -> usize {
+        self.input.chars().count()
+    }
+
+    /// Insert a character at cursor (cursor is character index)
     pub fn insert_char(&mut self, c: char) {
-        self.input.insert(self.cursor, c);
+        let byte_idx = self.char_to_byte_index(self.cursor);
+        self.input.insert(byte_idx, c);
         self.cursor += 1;
     }
 
@@ -191,14 +202,16 @@ impl CommandLineState {
     pub fn delete_char(&mut self) {
         if self.cursor > 0 {
             self.cursor -= 1;
-            self.input.remove(self.cursor);
+            let byte_idx = self.char_to_byte_index(self.cursor);
+            self.input.remove(byte_idx);
         }
     }
 
     /// Delete character at cursor
     pub fn delete_char_forward(&mut self) {
-        if self.cursor < self.input.len() {
-            self.input.remove(self.cursor);
+        if self.cursor < self.char_count() {
+            let byte_idx = self.char_to_byte_index(self.cursor);
+            self.input.remove(byte_idx);
         }
     }
 
@@ -211,7 +224,7 @@ impl CommandLineState {
 
     /// Move cursor right
     pub fn move_right(&mut self) {
-        if self.cursor < self.input.len() {
+        if self.cursor < self.char_count() {
             self.cursor += 1;
         }
     }
@@ -223,7 +236,7 @@ impl CommandLineState {
 
     /// Move cursor to end
     pub fn move_end(&mut self) {
-        self.cursor = self.input.len();
+        self.cursor = self.char_count();
     }
 
     /// Get the current input with prefix
@@ -240,9 +253,15 @@ impl CommandLineState {
         matches!(self.mode, CommandMode::Command | CommandMode::Search)
     }
 
+    /// Maximum number of history entries to keep
+    const MAX_HISTORY: usize = 1000;
+
     /// Add to history
     pub fn add_to_history(&mut self, cmd: String) {
         if !cmd.is_empty() && self.history.last() != Some(&cmd) {
+            if self.history.len() >= Self::MAX_HISTORY {
+                self.history.remove(0);
+            }
             self.history.push(cmd);
         }
     }
