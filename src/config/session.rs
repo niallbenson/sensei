@@ -121,10 +121,7 @@ mod tests {
 
     #[test]
     fn session_serializes() {
-        let mut session = Session {
-            current_book_id: Some("my-book".into()),
-            ..Default::default()
-        };
+        let mut session = Session { current_book_id: Some("my-book".into()), ..Default::default() };
         let book = session.book_mut("my-book");
         book.expanded_chapters.insert(0);
         book.expanded_chapters.insert(2);
