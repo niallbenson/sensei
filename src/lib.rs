@@ -5,6 +5,7 @@
 
 pub mod app;
 pub mod book;
+pub mod claude;
 pub mod config;
 pub mod export;
 pub mod learning;

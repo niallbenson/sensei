@@ -47,6 +47,12 @@ pub struct App {
 
     /// Terminal backend
     terminal: Terminal<CrosstermBackend<Stdout>>,
+
+    /// Channel receiver for Claude streaming events
+    claude_rx: Option<tokio::sync::mpsc::Receiver<crate::claude::StreamEvent>>,
+
+    /// Cancellation token for current Claude request
+    claude_cancel: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl App {
@@ -68,11 +74,16 @@ impl App {
             notes_store,
             image_cache,
             terminal,
+            claude_rx: None,
+            claude_cancel: None,
         };
 
         // Apply saved panel widths from session
         app.state.panel_visibility.curriculum_width_percent = app.session.curriculum_width_percent;
         app.state.panel_visibility.notes_width_percent = app.session.notes_width_percent;
+
+        // Check if Claude API key is configured
+        app.state.claude.needs_setup = !crate::claude::ApiKeyManager::has_api_key();
 
         // Auto-load first book from library if available
         app.auto_load_book();
@@ -194,11 +205,23 @@ impl App {
                 ui::draw(frame, state, config, progress, notes_store, image_cache);
             })?;
 
+            // Process Claude streaming events (non-blocking)
+            self.process_claude_events();
+
             // Handle all pending events before next redraw (makes scrolling feel faster)
             let mut should_quit = false;
             while event::poll(std::time::Duration::from_millis(0))? {
                 if let Event::Key(key_event) = event::read()? {
                     if key_event.kind == KeyEventKind::Press {
+                        // Ctrl+C to cancel Claude streaming
+                        if key_event.code == KeyCode::Char('c')
+                            && key_event.modifiers.contains(KeyModifiers::CONTROL)
+                            && self.state.claude.streaming
+                        {
+                            self.cancel_claude_stream();
+                            continue;
+                        }
+
                         // Route to notes input if editing a note
                         if self.state.notes.is_editing() {
                             self.handle_notes_input(key_event.code);
@@ -1260,6 +1283,39 @@ impl App {
                 Ok(false)
             }
             Command::Nop => Ok(false),
+            Command::ClaudeSetup => {
+                self.start_claude_setup();
+                Ok(false)
+            }
+            Command::ClaudeKey(key) => {
+                match crate::claude::ApiKeyManager::set_api_key(&key) {
+                    Ok(()) => {
+                        self.state.claude.needs_setup = false;
+                        self.state.command_line.set_message("API key saved to keyring");
+                    }
+                    Err(e) => {
+                        self.state.command_line.set_error(e.to_string());
+                    }
+                }
+                Ok(false)
+            }
+            Command::ClaudeModel(model_str) => {
+                if let Some(model) = crate::claude::ClaudeModel::parse(&model_str) {
+                    self.set_claude_model(model);
+                } else {
+                    self.state.command_line.set_error(format!(
+                        "Unknown model: {}. Options: haiku, sonnet35, sonnet, opus",
+                        model_str
+                    ));
+                }
+                Ok(false)
+            }
+            Command::ClaudeClear => {
+                self.state.claude.clear_streaming();
+                self.state.claude.clear_error();
+                self.state.command_line.set_message("Claude state cleared");
+                Ok(false)
+            }
         }
     }
 
@@ -1464,6 +1520,103 @@ impl App {
         }
 
         self.state.command_line.set_error(format!("Section not found: {}", path));
+    }
+
+    // ==================== Claude Integration ====================
+
+    /// Process pending Claude streaming events (non-blocking)
+    fn process_claude_events(&mut self) {
+        // Collect events first to avoid borrow conflict
+        let events: Vec<_> = if let Some(ref mut rx) = self.claude_rx {
+            let mut collected = Vec::new();
+            while let Ok(event) = rx.try_recv() {
+                collected.push(event);
+            }
+            collected
+        } else {
+            Vec::new()
+        };
+
+        // Now process collected events
+        for event in events {
+            self.handle_claude_event(event);
+        }
+    }
+
+    /// Handle a single Claude streaming event
+    fn handle_claude_event(&mut self, event: crate::claude::StreamEvent) {
+        use crate::claude::StreamEvent;
+
+        match event {
+            StreamEvent::ContentBlockDelta { text } => {
+                self.state.claude.stream_buffer.push_str(&text);
+            }
+            StreamEvent::MessageStop => {
+                // Response complete
+                self.state.claude.streaming = false;
+                self.state.command_line.set_message("Claude response complete");
+                // Note: The stream_buffer contains the full response
+                // It will be processed by the caller (e.g., Q&A, quiz generation)
+            }
+            StreamEvent::Error { message } => {
+                self.state.claude.set_error(&message);
+                self.state.claude.streaming = false;
+                self.claude_rx = None;
+                self.claude_cancel = None;
+            }
+            StreamEvent::MessageStart { .. } => {
+                // Response started
+                self.state.claude.clear_error();
+            }
+            _ => {
+                // Ignore other events (Ping, ContentBlockStart/Stop, MessageDelta)
+            }
+        }
+    }
+
+    /// Cancel the current Claude streaming request
+    fn cancel_claude_stream(&mut self) {
+        if let Some(token) = self.claude_cancel.take() {
+            token.cancel();
+        }
+        self.state.claude.streaming = false;
+        self.state.claude.stream_buffer.clear();
+        self.state.command_line.set_message("Request cancelled");
+        self.claude_rx = None;
+    }
+
+    /// Start Claude setup wizard
+    fn start_claude_setup(&mut self) {
+        self.state.claude.start_setup();
+        self.state.command_line.set_message("Claude API Setup");
+    }
+
+    /// Handle saving API key from setup wizard
+    #[allow(dead_code)]
+    fn save_claude_api_key(&mut self) {
+        let key = self.state.claude.setup_api_key.trim();
+        if key.is_empty() {
+            self.state.claude.set_error("API key cannot be empty");
+            return;
+        }
+
+        match crate::claude::ApiKeyManager::set_api_key(key) {
+            Ok(()) => {
+                self.state.claude.next_setup_step();
+                self.state.command_line.set_message("API key saved");
+            }
+            Err(e) => {
+                self.state.claude.set_error(e.to_string());
+            }
+        }
+    }
+
+    /// Set the Claude model
+    fn set_claude_model(&mut self, model: crate::claude::ClaudeModel) {
+        self.state.claude.model = model;
+        self.state
+            .command_line
+            .set_message(format!("Claude model set to {}", model.display_name()));
     }
 }
 

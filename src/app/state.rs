@@ -850,6 +850,102 @@ impl VisualModeState {
     }
 }
 
+/// Setup wizard step for Claude configuration
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum SetupStep {
+    /// Welcome message explaining the feature
+    #[default]
+    Welcome,
+    /// User enters their API key
+    EnterApiKey,
+    /// User selects preferred model
+    SelectModel,
+    /// Setup complete, test connection
+    Complete,
+}
+
+/// State for Claude AI integration
+#[derive(Debug, Clone, Default)]
+pub struct ClaudeState {
+    /// Whether Claude is currently streaming a response
+    pub streaming: bool,
+    /// Accumulated text from streaming response
+    pub stream_buffer: String,
+    /// Error message from last operation (if any)
+    pub error: Option<String>,
+    /// Selected model (Haiku or Sonnet)
+    pub model: crate::claude::ClaudeModel,
+    /// Whether API key setup is needed
+    pub needs_setup: bool,
+    /// Whether setup wizard is currently active
+    pub setup_active: bool,
+    /// Current step in setup wizard
+    pub setup_step: SetupStep,
+    /// Temporary API key during setup (before validation)
+    pub setup_api_key: String,
+}
+
+impl ClaudeState {
+    /// Check if Claude integration is available
+    pub fn is_available(&self) -> bool {
+        !self.needs_setup
+    }
+
+    /// Start the setup wizard
+    pub fn start_setup(&mut self) {
+        self.setup_active = true;
+        self.setup_step = SetupStep::Welcome;
+        self.setup_api_key.clear();
+        self.error = None;
+    }
+
+    /// Cancel and exit setup
+    pub fn cancel_setup(&mut self) {
+        self.setup_active = false;
+        self.setup_api_key.clear();
+    }
+
+    /// Advance to next setup step
+    pub fn next_setup_step(&mut self) {
+        self.setup_step = match self.setup_step {
+            SetupStep::Welcome => SetupStep::EnterApiKey,
+            SetupStep::EnterApiKey => SetupStep::SelectModel,
+            SetupStep::SelectModel => SetupStep::Complete,
+            SetupStep::Complete => {
+                self.setup_active = false;
+                self.needs_setup = false;
+                SetupStep::Complete
+            }
+        };
+    }
+
+    /// Go back to previous setup step
+    pub fn prev_setup_step(&mut self) {
+        self.setup_step = match self.setup_step {
+            SetupStep::Welcome => SetupStep::Welcome,
+            SetupStep::EnterApiKey => SetupStep::Welcome,
+            SetupStep::SelectModel => SetupStep::EnterApiKey,
+            SetupStep::Complete => SetupStep::SelectModel,
+        };
+    }
+
+    /// Set error message
+    pub fn set_error(&mut self, message: impl Into<String>) {
+        self.error = Some(message.into());
+    }
+
+    /// Clear error message
+    pub fn clear_error(&mut self) {
+        self.error = None;
+    }
+
+    /// Clear streaming state
+    pub fn clear_streaming(&mut self) {
+        self.streaming = false;
+        self.stream_buffer.clear();
+    }
+}
+
 /// Full application state
 #[derive(Debug, Default)]
 pub struct AppState {
@@ -891,6 +987,9 @@ pub struct AppState {
 
     /// Visual mode state (text selection)
     pub visual_mode: VisualModeState,
+
+    /// Claude AI integration state
+    pub claude: ClaudeState,
 }
 
 #[cfg(test)]

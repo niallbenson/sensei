@@ -23,6 +23,14 @@ pub enum Command {
     Goto(String),
     /// Clear message: (empty command)
     Nop,
+    /// Start Claude API setup wizard: :claude-setup
+    ClaudeSetup,
+    /// Set Claude API key: :claude-key <api-key>
+    ClaudeKey(String),
+    /// Set Claude model: :claude-model <haiku|sonnet>
+    ClaudeModel(String),
+    /// Clear Claude state: :claude-clear
+    ClaudeClear,
 }
 
 /// Result of parsing a command
@@ -81,6 +89,22 @@ pub fn parse_command(input: &str) -> ParseResult {
                 ParseResult::Ok(Command::Goto(args.to_string()))
             }
         }
+        "claude-setup" | "cs" => ParseResult::Ok(Command::ClaudeSetup),
+        "claude-key" | "ck" => {
+            if args.is_empty() {
+                ParseResult::MissingArgument("claude-key".to_string())
+            } else {
+                ParseResult::Ok(Command::ClaudeKey(args.to_string()))
+            }
+        }
+        "claude-model" | "cm" => {
+            if args.is_empty() {
+                ParseResult::MissingArgument("claude-model".to_string())
+            } else {
+                ParseResult::Ok(Command::ClaudeModel(args.to_string()))
+            }
+        }
+        "claude-clear" | "cc" => ParseResult::Ok(Command::ClaudeClear),
         _ => ParseResult::UnknownCommand(cmd.to_string()),
     }
 }
