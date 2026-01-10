@@ -5,7 +5,9 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
 };
 
-use super::{command_line, content, curriculum, image::ImageCache, notes_panel};
+use super::{
+    claude_panel, command_line, content, curriculum, image::ImageCache, notes_panel, quiz_panel,
+};
 use crate::app::state::{AppState, Panel};
 use crate::config::progress::Progress;
 use crate::notes::NotesStore;
@@ -76,6 +78,12 @@ pub fn draw(
 
     // Draw command line at bottom
     command_line::draw(frame, command_area, &state.command_line, theme);
+
+    // Draw Claude response panel as overlay (if visible)
+    claude_panel::draw(frame, area, state, theme);
+
+    // Draw quiz panel as overlay (if active)
+    quiz_panel::draw(frame, area, state, theme);
 }
 
 /// Create the layout constraints based on visible panels

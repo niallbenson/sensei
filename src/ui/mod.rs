@@ -1,5 +1,6 @@
 //! UI rendering components
 
+pub mod claude_panel;
 pub mod command_line;
 pub mod content;
 pub mod curriculum;
@@ -8,6 +9,8 @@ pub mod landing;
 pub mod layout;
 pub mod main_screen;
 pub mod notes_panel;
+pub mod quiz_panel;
+pub mod section_footer;
 
 use ratatui::Frame;
 

@@ -40,6 +40,9 @@ pub struct Session {
     /// Notes panel width percentage (10-50)
     #[serde(default = "default_notes_width")]
     pub notes_width_percent: u16,
+    /// Claude model preference (persisted across sessions)
+    #[serde(default)]
+    pub claude_model: Option<String>,
 }
 
 fn default_curriculum_width() -> u16 {

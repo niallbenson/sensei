@@ -23,6 +23,20 @@ pub enum Command {
     Goto(String),
     /// Clear message: (empty command)
     Nop,
+    /// Start Claude API setup wizard: :claude-setup
+    ClaudeSetup,
+    /// Set Claude API key: :claude-key <api-key>
+    ClaudeKey(String),
+    /// Set Claude model: :claude-model <haiku|sonnet>
+    ClaudeModel(String),
+    /// Clear Claude state: :claude-clear
+    ClaudeClear,
+    /// Ask Claude a question: :ask <question>
+    Ask(String),
+    /// Ask Claude to explain the current section: :explain [topic]
+    Explain(Option<String>),
+    /// Ask Claude about selected text: :sel <question>
+    AskSelection(String),
 }
 
 /// Result of parsing a command
@@ -79,6 +93,41 @@ pub fn parse_command(input: &str) -> ParseResult {
                 ParseResult::MissingArgument("goto".to_string())
             } else {
                 ParseResult::Ok(Command::Goto(args.to_string()))
+            }
+        }
+        "claude-setup" | "cs" => ParseResult::Ok(Command::ClaudeSetup),
+        "claude-key" | "ck" => {
+            if args.is_empty() {
+                ParseResult::MissingArgument("claude-key".to_string())
+            } else {
+                ParseResult::Ok(Command::ClaudeKey(args.to_string()))
+            }
+        }
+        "claude-model" | "cm" => {
+            if args.is_empty() {
+                ParseResult::MissingArgument("claude-model".to_string())
+            } else {
+                ParseResult::Ok(Command::ClaudeModel(args.to_string()))
+            }
+        }
+        "claude-clear" | "cc" => ParseResult::Ok(Command::ClaudeClear),
+        "ask" => {
+            if args.is_empty() {
+                ParseResult::MissingArgument("ask".to_string())
+            } else {
+                ParseResult::Ok(Command::Ask(args.to_string()))
+            }
+        }
+        "explain" | "ex" => {
+            let topic = if args.is_empty() { None } else { Some(args.to_string()) };
+            ParseResult::Ok(Command::Explain(topic))
+        }
+        "sel" | "selection" => {
+            if args.is_empty() {
+                // Default to "explain this"
+                ParseResult::Ok(Command::AskSelection("Explain this passage".to_string()))
+            } else {
+                ParseResult::Ok(Command::AskSelection(args.to_string()))
             }
         }
         _ => ParseResult::UnknownCommand(cmd.to_string()),
