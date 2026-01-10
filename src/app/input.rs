@@ -136,4 +136,107 @@ mod tests {
             Some(Action::Down)
         );
     }
+
+    #[test]
+    fn vim_h_maps_to_left() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('h')), Some(Action::Left));
+        assert_eq!(vim_key_to_action(KeyCode::Left), Some(Action::Left));
+    }
+
+    #[test]
+    fn vim_l_maps_to_right() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('l')), Some(Action::Right));
+        assert_eq!(vim_key_to_action(KeyCode::Right), Some(Action::Right));
+    }
+
+    #[test]
+    fn vim_g_maps_to_top() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('g')), Some(Action::Top));
+        assert_eq!(vim_key_to_action(KeyCode::Home), Some(Action::Top));
+    }
+
+    #[test]
+    fn vim_shift_g_maps_to_bottom() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('G')), Some(Action::Bottom));
+        assert_eq!(vim_key_to_action(KeyCode::End), Some(Action::Bottom));
+    }
+
+    #[test]
+    fn vim_d_maps_to_page_down() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('d')), Some(Action::PageDown));
+        assert_eq!(vim_key_to_action(KeyCode::PageDown), Some(Action::PageDown));
+    }
+
+    #[test]
+    fn vim_u_maps_to_page_up() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('u')), Some(Action::PageUp));
+        assert_eq!(vim_key_to_action(KeyCode::PageUp), Some(Action::PageUp));
+    }
+
+    #[test]
+    fn enter_maps_to_select() {
+        assert_eq!(vim_key_to_action(KeyCode::Enter), Some(Action::Select));
+    }
+
+    #[test]
+    fn esc_maps_to_back() {
+        assert_eq!(vim_key_to_action(KeyCode::Esc), Some(Action::Back));
+    }
+
+    #[test]
+    fn slash_maps_to_search() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('/')), Some(Action::Search));
+    }
+
+    #[test]
+    fn n_maps_to_next_match() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('n')), Some(Action::NextMatch));
+    }
+
+    #[test]
+    fn shift_n_maps_to_prev_match() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('N')), Some(Action::PrevMatch));
+    }
+
+    #[test]
+    fn v_maps_to_visual_mode() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('v')), Some(Action::VisualMode));
+    }
+
+    #[test]
+    fn question_maps_to_help() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('?')), Some(Action::Help));
+    }
+
+    #[test]
+    fn m_maps_to_mark_complete() {
+        assert_eq!(vim_key_to_action(KeyCode::Char('m')), Some(Action::MarkComplete));
+    }
+
+    #[test]
+    fn ctrl_f_maps_to_page_down() {
+        assert_eq!(
+            key_with_modifier_to_action(KeyCode::Char('f'), KeyModifiers::CONTROL),
+            Some(Action::PageDown)
+        );
+    }
+
+    #[test]
+    fn ctrl_b_maps_to_page_up() {
+        assert_eq!(
+            key_with_modifier_to_action(KeyCode::Char('b'), KeyModifiers::CONTROL),
+            Some(Action::PageUp)
+        );
+    }
+
+    #[test]
+    fn ctrl_unknown_returns_none() {
+        assert_eq!(key_with_modifier_to_action(KeyCode::Char('x'), KeyModifiers::CONTROL), None);
+    }
+
+    #[test]
+    fn arrow_keys_work() {
+        assert_eq!(vim_key_to_action(KeyCode::Down), Some(Action::Down));
+        assert_eq!(vim_key_to_action(KeyCode::Up), Some(Action::Up));
+    }
 }

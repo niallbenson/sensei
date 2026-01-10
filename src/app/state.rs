@@ -411,3 +411,290 @@ pub struct AppState {
     /// Command line state
     pub command_line: CommandLineState,
 }
+
+#[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_line_enter_command_mode() {
+        let mut state = CommandLineState::default();
+        state.input = "old".into();
+        state.cursor = 3;
+        state.enter_command_mode();
+        assert!(matches!(state.mode, CommandMode::Command));
+        assert!(state.input.is_empty());
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn command_line_enter_search_mode() {
+        let mut state = CommandLineState::default();
+        state.enter_search_mode();
+        assert!(matches!(state.mode, CommandMode::Search));
+    }
+
+    #[test]
+    fn command_line_exit_input_mode() {
+        let mut state = CommandLineState::default();
+        state.enter_command_mode();
+        state.input = "test".into();
+        state.exit_input_mode();
+        assert!(matches!(state.mode, CommandMode::Normal));
+        assert!(state.input.is_empty());
+    }
+
+    #[test]
+    fn command_line_set_message() {
+        let mut state = CommandLineState::default();
+        state.set_message("hello");
+        assert_eq!(state.message, Some("hello".into()));
+        assert!(!state.is_error);
+    }
+
+    #[test]
+    fn command_line_set_error() {
+        let mut state = CommandLineState::default();
+        state.set_error("error!");
+        assert_eq!(state.message, Some("error!".into()));
+        assert!(state.is_error);
+    }
+
+    #[test]
+    fn command_line_clear_message() {
+        let mut state = CommandLineState::default();
+        state.set_message("hello");
+        state.clear_message();
+        assert!(state.message.is_none());
+    }
+
+    #[test]
+    fn command_line_insert_char() {
+        let mut state = CommandLineState::default();
+        state.insert_char('a');
+        state.insert_char('b');
+        state.insert_char('c');
+        assert_eq!(state.input, "abc");
+        assert_eq!(state.cursor, 3);
+    }
+
+    #[test]
+    fn command_line_insert_char_unicode() {
+        let mut state = CommandLineState::default();
+        state.insert_char('日');
+        state.insert_char('本');
+        assert_eq!(state.input, "日本");
+        assert_eq!(state.cursor, 2);
+    }
+
+    #[test]
+    fn command_line_delete_char() {
+        let mut state = CommandLineState::default();
+        state.input = "abc".into();
+        state.cursor = 3;
+        state.delete_char();
+        assert_eq!(state.input, "ab");
+        assert_eq!(state.cursor, 2);
+    }
+
+    #[test]
+    fn command_line_delete_char_at_start() {
+        let mut state = CommandLineState::default();
+        state.input = "abc".into();
+        state.cursor = 0;
+        state.delete_char();
+        assert_eq!(state.input, "abc"); // No change
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn command_line_delete_char_forward() {
+        let mut state = CommandLineState::default();
+        state.input = "abc".into();
+        state.cursor = 1;
+        state.delete_char_forward();
+        assert_eq!(state.input, "ac");
+        assert_eq!(state.cursor, 1);
+    }
+
+    #[test]
+    fn command_line_delete_char_forward_at_end() {
+        let mut state = CommandLineState::default();
+        state.input = "abc".into();
+        state.cursor = 3;
+        state.delete_char_forward();
+        assert_eq!(state.input, "abc"); // No change
+    }
+
+    #[test]
+    fn command_line_move_left() {
+        let mut state = CommandLineState::default();
+        state.input = "abc".into();
+        state.cursor = 2;
+        state.move_left();
+        assert_eq!(state.cursor, 1);
+        state.move_left();
+        assert_eq!(state.cursor, 0);
+        state.move_left(); // Should not go below 0
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn command_line_move_right() {
+        let mut state = CommandLineState::default();
+        state.input = "abc".into();
+        state.cursor = 1;
+        state.move_right();
+        assert_eq!(state.cursor, 2);
+        state.move_right();
+        assert_eq!(state.cursor, 3);
+        state.move_right(); // Should not go beyond length
+        assert_eq!(state.cursor, 3);
+    }
+
+    #[test]
+    fn command_line_move_start_end() {
+        let mut state = CommandLineState::default();
+        state.input = "hello".into();
+        state.cursor = 2;
+        state.move_end();
+        assert_eq!(state.cursor, 5);
+        state.move_start();
+        assert_eq!(state.cursor, 0);
+    }
+
+    #[test]
+    fn command_line_display_text() {
+        let mut state = CommandLineState::default();
+        state.set_message("status");
+        assert_eq!(state.display_text(), "status");
+
+        state.enter_command_mode();
+        state.input = "quit".into();
+        assert_eq!(state.display_text(), ":quit");
+
+        state.enter_search_mode();
+        state.input = "pattern".into();
+        assert_eq!(state.display_text(), "/pattern");
+    }
+
+    #[test]
+    fn command_line_is_input_mode() {
+        let mut state = CommandLineState::default();
+        assert!(!state.is_input_mode());
+        state.enter_command_mode();
+        assert!(state.is_input_mode());
+        state.enter_search_mode();
+        assert!(state.is_input_mode());
+        state.exit_input_mode();
+        assert!(!state.is_input_mode());
+    }
+
+    #[test]
+    fn command_line_add_to_history() {
+        let mut state = CommandLineState::default();
+        state.add_to_history("cmd1".into());
+        state.add_to_history("cmd2".into());
+        assert_eq!(state.history, vec!["cmd1", "cmd2"]);
+    }
+
+    #[test]
+    fn command_line_history_no_duplicates() {
+        let mut state = CommandLineState::default();
+        state.add_to_history("cmd".into());
+        state.add_to_history("cmd".into());
+        assert_eq!(state.history.len(), 1);
+    }
+
+    #[test]
+    fn command_line_history_no_empty() {
+        let mut state = CommandLineState::default();
+        state.add_to_history("".into());
+        assert!(state.history.is_empty());
+    }
+
+    #[test]
+    fn command_line_history_navigation() {
+        let mut state = CommandLineState::default();
+        state.add_to_history("first".into());
+        state.add_to_history("second".into());
+        state.add_to_history("third".into());
+
+        state.history_up();
+        assert_eq!(state.input, "third");
+        state.history_up();
+        assert_eq!(state.input, "second");
+        state.history_up();
+        assert_eq!(state.input, "first");
+        state.history_up(); // Should stay at first
+        assert_eq!(state.input, "first");
+
+        state.history_down();
+        assert_eq!(state.input, "second");
+        state.history_down();
+        assert_eq!(state.input, "third");
+        state.history_down(); // Should clear
+        assert!(state.input.is_empty());
+    }
+
+    #[test]
+    fn command_line_history_up_empty() {
+        let mut state = CommandLineState::default();
+        state.history_up(); // Should not panic
+        assert!(state.input.is_empty());
+    }
+
+    #[test]
+    fn curriculum_state_ensure_selection_visible() {
+        let mut state = CurriculumState::default();
+        state.visible_height = 10;
+        state.selected_index = 15;
+        state.ensure_selection_visible();
+        // Selection should be visible (scroll_offset should adjust)
+        assert!(state.scroll_offset <= state.selected_index);
+    }
+
+    #[test]
+    fn curriculum_state_ensure_visible_scroll_up() {
+        let mut state = CurriculumState::default();
+        state.visible_height = 10;
+        state.scroll_offset = 5;
+        state.selected_index = 2; // Above visible area
+        state.ensure_selection_visible();
+        assert_eq!(state.scroll_offset, 2);
+    }
+
+    #[test]
+    fn content_state_default() {
+        let state = ContentState::default();
+        assert_eq!(state.scroll_offset, 0);
+        assert_eq!(state.total_lines, 0);
+    }
+
+    #[test]
+    fn search_state_default() {
+        let state = SearchState::default();
+        assert!(state.query.is_empty());
+        assert!(!state.active);
+    }
+
+    #[test]
+    fn panel_visibility_default() {
+        let vis = PanelVisibility::default();
+        assert!(vis.curriculum);
+        assert!(!vis.notes);
+    }
+
+    #[test]
+    fn panel_default_is_content() {
+        let panel = Panel::default();
+        assert!(matches!(panel, Panel::Content));
+    }
+
+    #[test]
+    fn screen_default_is_landing() {
+        let screen = Screen::default();
+        assert!(matches!(screen, Screen::Landing));
+    }
+}

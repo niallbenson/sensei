@@ -748,6 +748,7 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::Theme;
 
     #[test]
     fn wrap_text_short() {
@@ -774,5 +775,210 @@ mod tests {
     fn wrap_text_zero_width() {
         let result = wrap_text("hello", 0);
         assert_eq!(result, vec!["hello"]);
+    }
+
+    #[test]
+    fn pad_or_truncate_short() {
+        let result = pad_or_truncate("hi", 5);
+        assert_eq!(result, "hi   ");
+    }
+
+    #[test]
+    fn pad_or_truncate_exact() {
+        let result = pad_or_truncate("hello", 5);
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn pad_or_truncate_long() {
+        let result = pad_or_truncate("hello world", 5);
+        assert_eq!(result, "hell…");
+    }
+
+    #[test]
+    fn wrap_cell_text_short() {
+        let result = wrap_cell_text("short", 10);
+        assert_eq!(result, vec!["short"]);
+    }
+
+    #[test]
+    fn wrap_cell_text_exact() {
+        let result = wrap_cell_text("exactly 10", 10);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn wrap_cell_text_long() {
+        let result = wrap_cell_text("this is a very long text", 10);
+        assert!(result.len() > 1);
+    }
+
+    #[test]
+    fn wrap_cell_text_empty() {
+        let result = wrap_cell_text("", 10);
+        assert_eq!(result, vec![""]);
+    }
+
+    #[test]
+    fn parse_inline_code() {
+        let theme = Theme::default();
+        let spans = parse_inline_formatting("hello `code` world", &theme);
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].content, "hello ");
+        assert_eq!(spans[1].content, "code");
+        assert_eq!(spans[2].content, " world");
+    }
+
+    #[test]
+    fn parse_inline_bold() {
+        let theme = Theme::default();
+        let spans = parse_inline_formatting("hello **bold** world", &theme);
+        // Should have 3 parts: "hello ", "bold", " world"
+        assert!(spans.len() >= 3);
+    }
+
+    #[test]
+    fn parse_inline_italic() {
+        let theme = Theme::default();
+        let spans = parse_inline_formatting("hello *italic* world", &theme);
+        assert!(spans.len() >= 3);
+    }
+
+    #[test]
+    fn parse_inline_link() {
+        let theme = Theme::default();
+        let spans = parse_inline_formatting("click [here](http://example.com) now", &theme);
+        // Should contain the link text "here"
+        let has_link = spans.iter().any(|s| s.content.contains("here"));
+        assert!(has_link);
+    }
+
+    #[test]
+    fn parse_inline_plain() {
+        let theme = Theme::default();
+        let spans = parse_inline_formatting("plain text only", &theme);
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content, "plain text only");
+    }
+
+    #[test]
+    fn render_content_blocks_empty() {
+        let theme = Theme::default();
+        let lines = render_content_blocks(&[], &theme, 80);
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn render_content_blocks_paragraph() {
+        use crate::book::ContentBlock;
+        let theme = Theme::default();
+        let blocks = vec![ContentBlock::Paragraph("Hello world".into())];
+        let lines = render_content_blocks(&blocks, &theme, 80);
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn render_content_blocks_heading() {
+        use crate::book::ContentBlock;
+        let theme = Theme::default();
+        let blocks = vec![ContentBlock::Heading { level: 1, text: "Title".into() }];
+        let lines = render_content_blocks(&blocks, &theme, 80);
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn render_content_blocks_code() {
+        use crate::book::{CodeBlock, ContentBlock};
+        let theme = Theme::default();
+        let blocks = vec![ContentBlock::Code(CodeBlock {
+            language: Some("rust".into()),
+            code: "fn main() {}".into(),
+            filename: None,
+            highlight_lines: Vec::new(),
+        })];
+        let lines = render_content_blocks(&blocks, &theme, 80);
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn render_content_blocks_list() {
+        use crate::book::ContentBlock;
+        let theme = Theme::default();
+        let blocks = vec![ContentBlock::UnorderedList(vec!["Item 1".into(), "Item 2".into()])];
+        let lines = render_content_blocks(&blocks, &theme, 80);
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn render_content_blocks_ordered_list() {
+        use crate::book::ContentBlock;
+        let theme = Theme::default();
+        let blocks = vec![ContentBlock::OrderedList(vec!["First".into(), "Second".into()])];
+        let lines = render_content_blocks(&blocks, &theme, 80);
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn render_content_blocks_blockquote() {
+        use crate::book::ContentBlock;
+        let theme = Theme::default();
+        let blocks = vec![ContentBlock::Blockquote("Quote text".into())];
+        let lines = render_content_blocks(&blocks, &theme, 80);
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn render_content_blocks_horizontal_rule() {
+        use crate::book::ContentBlock;
+        let theme = Theme::default();
+        let blocks = vec![ContentBlock::HorizontalRule];
+        let lines = render_content_blocks(&blocks, &theme, 80);
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn render_content_blocks_image() {
+        use crate::book::ContentBlock;
+        let theme = Theme::default();
+        let blocks = vec![ContentBlock::Image {
+            alt: "Alt text".into(),
+            src: "http://example.com/img.png".into(),
+        }];
+        let lines = render_content_blocks(&blocks, &theme, 80);
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn render_content_blocks_table() {
+        use crate::book::{Alignment, ContentBlock, Table};
+        let theme = Theme::default();
+        let blocks = vec![ContentBlock::Table(Table {
+            headers: vec!["Col1".into(), "Col2".into()],
+            rows: vec![vec!["A".into(), "B".into()]],
+            alignments: vec![Alignment::Left, Alignment::Left],
+        })];
+        let lines = render_content_blocks(&blocks, &theme, 80);
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn highlight_code_line_rust() {
+        let theme = Theme::default();
+        let result = highlight_code_line("let x = 5;", Some("rust"), &theme);
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn highlight_code_line_unknown() {
+        let theme = Theme::default();
+        let result = highlight_code_line("some code", Some("unknown_lang"), &theme);
+        assert!(!result.is_empty());
+    }
+
+    #[test]
+    fn highlight_code_line_none() {
+        let theme = Theme::default();
+        let result = highlight_code_line("plain code", None, &theme);
+        assert!(!result.is_empty());
     }
 }

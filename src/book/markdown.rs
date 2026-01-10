@@ -730,4 +730,131 @@ fn main() {}
         assert!(matches!(&blocks[2], ContentBlock::Code(_)));
         assert!(matches!(&blocks[3], ContentBlock::UnorderedList(_)));
     }
+
+    #[test]
+    fn parse_markdown_link_valid() {
+        let result = parse_markdown_link("[Title](./path.md)");
+        assert!(result.is_some());
+        let (title, path) = result.unwrap();
+        assert_eq!(title, "Title");
+        assert_eq!(path, "./path.md");
+    }
+
+    #[test]
+    fn parse_markdown_link_invalid() {
+        assert!(parse_markdown_link("not a link").is_none());
+        assert!(parse_markdown_link("[Title]").is_none());
+        assert!(parse_markdown_link("[Title](").is_none());
+    }
+
+    #[test]
+    fn parse_markdown_link_with_spaces() {
+        let result = parse_markdown_link("[My Title](./my path.md)");
+        assert!(result.is_some());
+        let (title, _) = result.unwrap();
+        assert_eq!(title, "My Title");
+    }
+
+    #[test]
+    fn convert_alignment_left() {
+        use pulldown_cmark::Alignment as PulldownAlign;
+        assert!(matches!(convert_alignment(PulldownAlign::Left), Alignment::Left));
+        assert!(matches!(convert_alignment(PulldownAlign::None), Alignment::Left));
+    }
+
+    #[test]
+    fn convert_alignment_center() {
+        use pulldown_cmark::Alignment as PulldownAlign;
+        assert!(matches!(convert_alignment(PulldownAlign::Center), Alignment::Center));
+    }
+
+    #[test]
+    fn convert_alignment_right() {
+        use pulldown_cmark::Alignment as PulldownAlign;
+        assert!(matches!(convert_alignment(PulldownAlign::Right), Alignment::Right));
+    }
+
+    #[test]
+    fn heading_level_conversion() {
+        use pulldown_cmark::HeadingLevel::*;
+        assert_eq!(heading_level_to_u8(H1), 1);
+        assert_eq!(heading_level_to_u8(H2), 2);
+        assert_eq!(heading_level_to_u8(H3), 3);
+        assert_eq!(heading_level_to_u8(H4), 4);
+        assert_eq!(heading_level_to_u8(H5), 5);
+        assert_eq!(heading_level_to_u8(H6), 6);
+    }
+
+    #[test]
+    fn parse_image() {
+        let md = "![Alt text](image.png)";
+        let blocks = parse_markdown_content(md);
+        // Image is parsed with src, alt may be in separate paragraph due to markdown parsing
+        let has_image = blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Image { src, .. } if src == "image.png"));
+        assert!(has_image, "Expected image block, got {:?}", blocks);
+    }
+
+    #[test]
+    fn parse_empty_content() {
+        let blocks = parse_markdown_content("");
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn parse_whitespace_only() {
+        let blocks = parse_markdown_content("   \n\n   \n");
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn parse_nested_list() {
+        let md = "- Item 1\n  - Nested\n- Item 2";
+        let blocks = parse_markdown_content(md);
+        // Should have list(s)
+        assert!(!blocks.is_empty());
+    }
+
+    #[test]
+    fn parse_code_without_language() {
+        let md = "```\nplain code\n```";
+        let blocks = parse_markdown_content(md);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::Code(code) = &blocks[0] {
+            assert!(code.language.is_none());
+        }
+    }
+
+    #[test]
+    fn parse_multiple_paragraphs() {
+        let md = "First paragraph.\n\nSecond paragraph.";
+        let blocks = parse_markdown_content(md);
+        assert_eq!(blocks.len(), 2);
+    }
+
+    #[test]
+    fn flush_text_empty() {
+        let mut text = String::new();
+        let mut blocks = Vec::new();
+        flush_text(&mut text, &mut blocks);
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn flush_text_whitespace() {
+        let mut text = "   ".to_string();
+        let mut blocks = Vec::new();
+        flush_text(&mut text, &mut blocks);
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn flush_text_content() {
+        let mut text = "Hello world".to_string();
+        let mut blocks = Vec::new();
+        flush_text(&mut text, &mut blocks);
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(&blocks[0], ContentBlock::Paragraph(t) if t == "Hello world"));
+    }
 }
