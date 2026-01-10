@@ -13,6 +13,7 @@ use super::model::{
 };
 
 /// Parse a markdown string into content blocks
+// skipcq: RS-R1000 - Parser functions inherently have high cyclomatic complexity
 #[allow(clippy::cognitive_complexity)]
 pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
     let options = Options::ENABLE_TABLES
@@ -42,7 +43,6 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
     let mut current_row: Vec<String> = Vec::new();
     let mut current_cell = String::default();
     let mut table_alignments: Vec<Alignment> = Vec::new();
-    let mut in_table_head = false;
 
     let mut current_heading_level: Option<u8> = None;
 
@@ -155,19 +155,22 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
             }
 
             Event::Start(Tag::TableHead) => {
-                in_table_head = true;
+                current_row.clear();
             }
             Event::End(TagEnd::TableHead) => {
-                in_table_head = false;
+                // pulldown-cmark emits header cells directly inside TableHead without TableRow
+                // So we capture them here when TableHead ends
+                if !current_row.is_empty() {
+                    table_headers = std::mem::take(&mut current_row);
+                }
             }
 
             Event::Start(Tag::TableRow) => {
                 current_row.clear();
             }
             Event::End(TagEnd::TableRow) => {
-                if in_table_head {
-                    table_headers = std::mem::take(&mut current_row);
-                } else {
+                // Data rows (headers are handled in TableHead)
+                if !current_row.is_empty() {
                     table_rows.push(std::mem::take(&mut current_row));
                 }
             }
@@ -246,6 +249,41 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
             // Links - extract text only
             Event::Start(Tag::Link { .. }) | Event::End(TagEnd::Link) => {}
 
+            // Handle HTML - extract text content, ignore tags
+            Event::Html(html) | Event::InlineHtml(html) => {
+                // Extract any visible text from HTML, skip tags
+                let text = html
+                    .replace("&vert;", "|")
+                    .replace("&lt;", "<")
+                    .replace("&gt;", ">")
+                    .replace("&amp;", "&")
+                    .replace("&quot;", "\"");
+
+                // Strip HTML tags but keep content
+                let mut result = String::new();
+                let mut in_tag = false;
+                for c in text.chars() {
+                    if c == '<' {
+                        in_tag = true;
+                    } else if c == '>' {
+                        in_tag = false;
+                    } else if !in_tag {
+                        result.push(c);
+                    }
+                }
+
+                let trimmed = result.trim();
+                if !trimmed.is_empty() {
+                    if in_table {
+                        current_cell.push_str(trimmed);
+                    } else if in_list {
+                        current_list_item.push_str(trimmed);
+                    } else {
+                        current_text.push_str(trimmed);
+                    }
+                }
+            }
+
             _ => {}
         }
     }
@@ -313,6 +351,12 @@ pub fn parse_markdown_file(path: &Path, section_number: usize) -> Result<Section
 /// Parse a directory of markdown files into a book
 pub fn parse_markdown_directory(path: &Path) -> Result<Book> {
     let path = path.canonicalize().with_context(|| format!("Invalid path: {}", path.display()))?;
+
+    // Check for SUMMARY.md (mdbook format)
+    let summary_path = path.join("SUMMARY.md");
+    if summary_path.exists() {
+        return parse_mdbook_directory(&path, &summary_path);
+    }
 
     // Generate book ID from directory name
     let book_id =
@@ -412,6 +456,137 @@ pub fn parse_markdown_directory(path: &Path) -> Result<Book> {
     }
 
     Ok(book)
+}
+
+/// Parse an mdbook-format directory using SUMMARY.md
+fn parse_mdbook_directory(path: &Path, summary_path: &Path) -> Result<Book> {
+    let summary_content = fs::read_to_string(summary_path)
+        .with_context(|| format!("Failed to read SUMMARY.md: {}", summary_path.display()))?;
+
+    // Extract book title from first line (usually # Title)
+    let title = summary_content
+        .lines()
+        .find(|l| l.starts_with('#'))
+        .map(|l| l.trim_start_matches('#').trim().to_string())
+        .unwrap_or_else(|| "Untitled".to_string());
+
+    let book_id =
+        path.file_name().map_or_else(|| "unknown".to_string(), |s| s.to_string_lossy().to_string());
+
+    let metadata = BookMetadata {
+        id: book_id,
+        title,
+        author: None,
+        source: BookSource::Markdown(path.to_path_buf()),
+        language: Some("en".to_string()),
+        description: None,
+        cover_image: None,
+        added_at: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs() as i64),
+        last_accessed: None,
+    };
+
+    let mut book = Book::new(metadata);
+
+    // Parse SUMMARY.md structure
+    // Format: - [Title](file.md) for chapters, indented for sections
+    let mut current_chapter: Option<Chapter> = None;
+    let mut chapter_num = 0;
+
+    for line in summary_content.lines() {
+        // Skip empty lines and comments
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        // Parse markdown link: [Title](file.md)
+        if let Some((link_title, link_path)) = parse_markdown_link(trimmed) {
+            let file_path = path.join(&link_path);
+
+            // Determine if this is a chapter (starts with -) or section (indented -)
+            let indent = line.len() - line.trim_start().len();
+            let is_chapter_line = trimmed.starts_with('-') || trimmed.starts_with('[');
+
+            if indent == 0 && is_chapter_line && trimmed.starts_with('-') {
+                // New chapter
+                if let Some(ch) = current_chapter.take() {
+                    if !ch.sections.is_empty() {
+                        book.chapters.push(ch);
+                    }
+                }
+
+                chapter_num += 1;
+                let mut chapter = Chapter::new(&link_title, chapter_num, &link_path);
+
+                // Parse the chapter's main file as first section if it exists
+                if file_path.exists() {
+                    if let Ok(section) = parse_markdown_file(&file_path, 0) {
+                        chapter.sections.push(section);
+                    }
+                }
+
+                current_chapter = Some(chapter);
+            } else if indent > 0 && trimmed.starts_with('-') {
+                // Section within current chapter
+                if let Some(ref mut chapter) = current_chapter {
+                    if file_path.exists() {
+                        let section_num = chapter.sections.len() + 1;
+                        if let Ok(mut section) = parse_markdown_file(&file_path, section_num) {
+                            // Use the title from SUMMARY.md instead of extracting from file
+                            section.title = link_title;
+                            chapter.sections.push(section);
+                        }
+                    }
+                }
+            } else if indent == 0 && trimmed.starts_with('[') {
+                // Top-level link without - (like [Foreword](foreword.md))
+                // Treat as a standalone chapter with one section
+                if let Some(ch) = current_chapter.take() {
+                    if !ch.sections.is_empty() {
+                        book.chapters.push(ch);
+                    }
+                }
+
+                if file_path.exists() {
+                    chapter_num += 1;
+                    let mut chapter = Chapter::new(&link_title, chapter_num, &link_path);
+                    if let Ok(section) = parse_markdown_file(&file_path, 1) {
+                        chapter.sections.push(section);
+                    }
+                    book.chapters.push(chapter);
+                }
+            }
+        }
+    }
+
+    // Don't forget the last chapter
+    if let Some(ch) = current_chapter {
+        if !ch.sections.is_empty() {
+            book.chapters.push(ch);
+        }
+    }
+
+    Ok(book)
+}
+
+/// Parse a markdown link [Title](path.md) and return (title, path)
+fn parse_markdown_link(text: &str) -> Option<(String, String)> {
+    let text = text.trim().trim_start_matches('-').trim();
+
+    let open_bracket = text.find('[')?;
+    let close_bracket = text.find(']')?;
+    let open_paren = text.find('(')?;
+    let close_paren = text.find(')')?;
+
+    if close_bracket > open_bracket && open_paren == close_bracket + 1 && close_paren > open_paren {
+        let title = text[open_bracket + 1..close_bracket].to_string();
+        let path = text[open_paren + 1..close_paren].to_string();
+        Some((title, path))
+    } else {
+        None
+    }
 }
 
 fn extract_title_from_file(path: &Path) -> Option<String> {
@@ -515,10 +690,10 @@ mod tests {
         let blocks = parse_markdown_content(md);
         assert_eq!(blocks.len(), 1);
         if let ContentBlock::Table(table) = &blocks[0] {
-            // pulldown-cmark includes header row in rows, so we check total count
-            // Headers are extracted from the first row
-            let total_rows = table.headers.len() + table.rows.iter().flatten().count();
-            assert!(total_rows > 0, "Table should have content");
+            assert_eq!(table.headers, vec!["Name", "Value"]);
+            assert_eq!(table.rows.len(), 2);
+            assert_eq!(table.rows[0], vec!["foo", "1"]);
+            assert_eq!(table.rows[1], vec!["bar", "2"]);
         } else {
             panic!("Expected table, got {:?}", blocks.first());
         }
@@ -555,5 +730,132 @@ fn main() {}
         assert!(matches!(&blocks[1], ContentBlock::Paragraph(_)));
         assert!(matches!(&blocks[2], ContentBlock::Code(_)));
         assert!(matches!(&blocks[3], ContentBlock::UnorderedList(_)));
+    }
+
+    #[test]
+    fn parse_markdown_link_valid() {
+        let result = parse_markdown_link("[Title](./path.md)");
+        assert!(result.is_some());
+        let (title, path) = result.unwrap();
+        assert_eq!(title, "Title");
+        assert_eq!(path, "./path.md");
+    }
+
+    #[test]
+    fn parse_markdown_link_invalid() {
+        assert!(parse_markdown_link("not a link").is_none());
+        assert!(parse_markdown_link("[Title]").is_none());
+        assert!(parse_markdown_link("[Title](").is_none());
+    }
+
+    #[test]
+    fn parse_markdown_link_with_spaces() {
+        let result = parse_markdown_link("[My Title](./my path.md)");
+        assert!(result.is_some());
+        let (title, _) = result.unwrap();
+        assert_eq!(title, "My Title");
+    }
+
+    #[test]
+    fn convert_alignment_left() {
+        use pulldown_cmark::Alignment as PulldownAlign;
+        assert!(matches!(convert_alignment(PulldownAlign::Left), Alignment::Left));
+        assert!(matches!(convert_alignment(PulldownAlign::None), Alignment::Left));
+    }
+
+    #[test]
+    fn convert_alignment_center() {
+        use pulldown_cmark::Alignment as PulldownAlign;
+        assert!(matches!(convert_alignment(PulldownAlign::Center), Alignment::Center));
+    }
+
+    #[test]
+    fn convert_alignment_right() {
+        use pulldown_cmark::Alignment as PulldownAlign;
+        assert!(matches!(convert_alignment(PulldownAlign::Right), Alignment::Right));
+    }
+
+    #[test]
+    fn heading_level_conversion() {
+        use pulldown_cmark::HeadingLevel::*;
+        assert_eq!(heading_level_to_u8(H1), 1);
+        assert_eq!(heading_level_to_u8(H2), 2);
+        assert_eq!(heading_level_to_u8(H3), 3);
+        assert_eq!(heading_level_to_u8(H4), 4);
+        assert_eq!(heading_level_to_u8(H5), 5);
+        assert_eq!(heading_level_to_u8(H6), 6);
+    }
+
+    #[test]
+    fn parse_image() {
+        let md = "![Alt text](image.png)";
+        let blocks = parse_markdown_content(md);
+        // Image is parsed with src, alt may be in separate paragraph due to markdown parsing
+        let has_image = blocks
+            .iter()
+            .any(|b| matches!(b, ContentBlock::Image { src, .. } if src == "image.png"));
+        assert!(has_image, "Expected image block, got {:?}", blocks);
+    }
+
+    #[test]
+    fn parse_empty_content() {
+        let blocks = parse_markdown_content("");
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn parse_whitespace_only() {
+        let blocks = parse_markdown_content("   \n\n   \n");
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn parse_nested_list() {
+        let md = "- Item 1\n  - Nested\n- Item 2";
+        let blocks = parse_markdown_content(md);
+        // Should have list(s)
+        assert!(!blocks.is_empty());
+    }
+
+    #[test]
+    fn parse_code_without_language() {
+        let md = "```\nplain code\n```";
+        let blocks = parse_markdown_content(md);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::Code(code) = &blocks[0] {
+            assert!(code.language.is_none());
+        }
+    }
+
+    #[test]
+    fn parse_multiple_paragraphs() {
+        let md = "First paragraph.\n\nSecond paragraph.";
+        let blocks = parse_markdown_content(md);
+        assert_eq!(blocks.len(), 2);
+    }
+
+    #[test]
+    fn flush_text_empty() {
+        let mut text = String::new();
+        let mut blocks = Vec::new();
+        flush_text(&mut text, &mut blocks);
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn flush_text_whitespace() {
+        let mut text = "   ".to_string();
+        let mut blocks = Vec::new();
+        flush_text(&mut text, &mut blocks);
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn flush_text_content() {
+        let mut text = "Hello world".to_string();
+        let mut blocks = Vec::new();
+        flush_text(&mut text, &mut blocks);
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(&blocks[0], ContentBlock::Paragraph(t) if t == "Hello world"));
     }
 }

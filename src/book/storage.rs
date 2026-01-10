@@ -227,6 +227,7 @@ pub fn add_book(source_path: &Path) -> Result<LibraryEntry> {
 
     // Cache the parsed book
     let cache_path = book_cache_path(&entry.metadata.id)?;
+    // skipcq: RS-E1015 - false positive, no unit value is passed here
     let contents =
         serde_json::to_string_pretty(&book).with_context(|| "Failed to serialize book")?;
     fs::write(&cache_path, contents)

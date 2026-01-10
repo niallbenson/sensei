@@ -18,7 +18,7 @@ const STATUS_IN_PROGRESS: &str = "●";
 const STATUS_COMPLETED: &str = "✓";
 
 /// Draw the curriculum tree browser
-pub fn draw(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme, focused: bool) {
+pub fn draw(frame: &mut Frame, area: Rect, state: &mut AppState, theme: &Theme, focused: bool) {
     draw_with_progress(frame, area, state, theme, focused, None);
 }
 
@@ -26,7 +26,7 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &AppState, theme: &Theme, focu
 pub fn draw_with_progress(
     frame: &mut Frame,
     area: Rect,
-    state: &AppState,
+    state: &mut AppState,
     theme: &Theme,
     focused: bool,
     progress: Option<&Progress>,
@@ -41,6 +41,9 @@ pub fn draw_with_progress(
 
     let inner = block.inner(area);
     frame.render_widget(block, area);
+
+    // Update visible height for scroll calculations
+    state.curriculum.visible_height = inner.height as usize;
 
     // If no book loaded, show message
     let Some(book) = &state.book else {
