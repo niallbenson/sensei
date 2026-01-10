@@ -1,7 +1,5 @@
 //! API key management using system keyring
 
-use keyring::Entry;
-
 use super::error::ClaudeError;
 
 /// Service name for keyring storage
@@ -14,8 +12,25 @@ pub struct ApiKeyManager;
 
 impl ApiKeyManager {
     /// Get the API key from system keyring
+    #[cfg(target_os = "macos")]
     pub fn get_api_key() -> Result<String, ClaudeError> {
-        let entry = Entry::new(SERVICE_NAME, API_KEY_ENTRY)
+        let output = std::process::Command::new("security")
+            .args(["find-generic-password", "-s", SERVICE_NAME, "-a", API_KEY_ENTRY, "-w"])
+            .output()
+            .map_err(|e| ClaudeError::KeyringError(e.to_string()))?;
+
+        if output.status.success() {
+            let key = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if key.is_empty() { Err(ClaudeError::ApiKeyNotFound) } else { Ok(key) }
+        } else {
+            Err(ClaudeError::ApiKeyNotFound)
+        }
+    }
+
+    /// Get the API key from system keyring (non-macOS fallback using keyring crate)
+    #[cfg(not(target_os = "macos"))]
+    pub fn get_api_key() -> Result<String, ClaudeError> {
+        let entry = keyring::Entry::new(SERVICE_NAME, API_KEY_ENTRY)
             .map_err(|e| ClaudeError::KeyringError(e.to_string()))?;
 
         entry.get_password().map_err(|e| match e {
@@ -25,13 +40,37 @@ impl ApiKeyManager {
     }
 
     /// Store the API key in system keyring
+    #[cfg(target_os = "macos")]
     pub fn set_api_key(key: &str) -> Result<(), ClaudeError> {
         // Validate key format
         if !Self::validate_key_format(key) {
             return Err(ClaudeError::InvalidApiKey);
         }
 
-        let entry = Entry::new(SERVICE_NAME, API_KEY_ENTRY)
+        // Delete existing entry first (ignore errors)
+        let _ = Self::delete_api_key();
+
+        let output = std::process::Command::new("security")
+            .args(["add-generic-password", "-s", SERVICE_NAME, "-a", API_KEY_ENTRY, "-w", key])
+            .output()
+            .map_err(|e| ClaudeError::KeyringError(e.to_string()))?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(ClaudeError::KeyringError(format!("Failed to store key: {}", stderr)))
+        }
+    }
+
+    /// Store the API key in system keyring (non-macOS fallback)
+    #[cfg(not(target_os = "macos"))]
+    pub fn set_api_key(key: &str) -> Result<(), ClaudeError> {
+        if !Self::validate_key_format(key) {
+            return Err(ClaudeError::InvalidApiKey);
+        }
+
+        let entry = keyring::Entry::new(SERVICE_NAME, API_KEY_ENTRY)
             .map_err(|e| ClaudeError::KeyringError(e.to_string()))?;
 
         entry.set_password(key).map_err(|e| ClaudeError::KeyringError(e.to_string()))
@@ -43,8 +82,25 @@ impl ApiKeyManager {
     }
 
     /// Delete the stored API key
+    #[cfg(target_os = "macos")]
     pub fn delete_api_key() -> Result<(), ClaudeError> {
-        let entry = Entry::new(SERVICE_NAME, API_KEY_ENTRY)
+        let output = std::process::Command::new("security")
+            .args(["delete-generic-password", "-s", SERVICE_NAME, "-a", API_KEY_ENTRY])
+            .output()
+            .map_err(|e| ClaudeError::KeyringError(e.to_string()))?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            // Item not found is not an error for delete
+            Ok(())
+        }
+    }
+
+    /// Delete the stored API key (non-macOS fallback)
+    #[cfg(not(target_os = "macos"))]
+    pub fn delete_api_key() -> Result<(), ClaudeError> {
+        let entry = keyring::Entry::new(SERVICE_NAME, API_KEY_ENTRY)
             .map_err(|e| ClaudeError::KeyringError(e.to_string()))?;
 
         entry.delete_credential().map_err(|e| ClaudeError::KeyringError(e.to_string()))
