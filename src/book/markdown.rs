@@ -471,10 +471,9 @@ fn resolve_include(base_dir: &Path, path_spec: &str, is_rustdoc: bool) -> String
         (path_spec, None)
     };
 
-    // Early path traversal protection: block suspicious patterns before filesystem access
-    // This catches attacks even when the target file doesn't exist
-    if file_path.contains("..") || file_path.starts_with('/') || file_path.starts_with('\\') {
-        return format!("// Path traversal blocked: {}", file_path);
+    // Block absolute paths - these should never be in includes
+    if file_path.starts_with('/') || file_path.starts_with('\\') {
+        return format!("// Absolute path not allowed: {}", file_path);
     }
 
     let full_path = base_dir.join(file_path);
@@ -1276,23 +1275,15 @@ after"#;
     }
 
     #[test]
-    fn resolve_include_blocks_path_traversal() {
+    fn resolve_include_blocks_absolute_paths() {
         use std::path::Path;
 
         let base_dir = Path::new("/tmp/book/src");
 
-        // Test parent directory traversal
-        let result = super::resolve_include(base_dir, "../../../etc/passwd", false);
-        assert!(
-            result.contains("Path traversal blocked"),
-            "Should block .. traversal, got: {}",
-            result
-        );
-
-        // Test absolute path
+        // Test absolute path - blocked before filesystem access
         let result = super::resolve_include(base_dir, "/etc/passwd", false);
         assert!(
-            result.contains("Path traversal blocked"),
+            result.contains("Absolute path not allowed"),
             "Should block absolute paths, got: {}",
             result
         );
@@ -1300,16 +1291,17 @@ after"#;
         // Test Windows-style absolute path
         let result = super::resolve_include(base_dir, "\\etc\\passwd", false);
         assert!(
-            result.contains("Path traversal blocked"),
+            result.contains("Absolute path not allowed"),
             "Should block backslash paths, got: {}",
             result
         );
 
-        // Test hidden traversal in middle of path
-        let result = super::resolve_include(base_dir, "foo/../../../etc/passwd", false);
+        // Relative paths with .. are allowed (canonicalization validates they stay in book)
+        // These return "File not found" since the paths don't exist
+        let result = super::resolve_include(base_dir, "../../../etc/passwd", false);
         assert!(
-            result.contains("Path traversal blocked"),
-            "Should block hidden .. in path, got: {}",
+            result.contains("File not found"),
+            "Non-existent path traversal should return file not found, got: {}",
             result
         );
     }

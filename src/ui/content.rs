@@ -566,19 +566,47 @@ fn render_blockquote(lines: &mut Vec<Line<'static>>, text: &str, theme: &Theme, 
     let prefix = "  │ ";
     let content_width = width.saturating_sub(4); // Account for prefix
 
-    let spans = parse_inline_formatting(text, theme);
-    // Apply muted style to all spans
-    let muted_spans: Vec<Span<'static>> = spans
-        .into_iter()
-        .map(|s| Span::styled(s.content.to_string(), s.style.fg(theme.fg_muted)))
-        .collect();
-    let wrapped = wrap_spans(muted_spans, content_width);
+    // Split by double newlines (paragraph breaks) and single newlines
+    // Process each line/paragraph separately to preserve structure
+    for paragraph in text.split("\n\n") {
+        let paragraph = paragraph.trim();
+        if paragraph.is_empty() {
+            continue;
+        }
 
-    for line in wrapped {
-        let mut line_spans = vec![Span::styled(prefix, Style::default().fg(theme.accent_primary))];
-        line_spans.extend(line.spans);
-        lines.push(Line::from(line_spans));
+        // Process each line within the paragraph
+        for line_text in paragraph.split('\n') {
+            let line_text = line_text.trim();
+            if line_text.is_empty() {
+                // Empty line within blockquote - add blank line with prefix
+                lines.push(Line::from(Span::styled(
+                    prefix,
+                    Style::default().fg(theme.accent_primary),
+                )));
+                continue;
+            }
+
+            let spans = parse_inline_formatting(line_text, theme);
+            // Apply muted style to all spans
+            let muted_spans: Vec<Span<'static>> = spans
+                .into_iter()
+                .map(|s| Span::styled(s.content.to_string(), s.style.fg(theme.fg_muted)))
+                .collect();
+            let wrapped = wrap_spans(muted_spans, content_width);
+
+            for wrapped_line in wrapped {
+                let mut line_spans =
+                    vec![Span::styled(prefix, Style::default().fg(theme.accent_primary))];
+                line_spans.extend(wrapped_line.spans);
+                lines.push(Line::from(line_spans));
+            }
+        }
+
+        // Add blank line between paragraphs
+        lines.push(Line::from(Span::styled(prefix, Style::default().fg(theme.accent_primary))));
     }
+
+    // Final empty line after blockquote
     lines.push(Line::from(""));
 }
 
