@@ -57,14 +57,33 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
     for event in parser {
         match event {
             Event::Start(Tag::Heading { level, .. }) => {
-                flush_text(&mut current_text, &mut blocks);
-                current_heading_level = Some(heading_level_to_u8(level));
+                if in_blockquote {
+                    // Headings inside blockquotes get formatted as bold text
+                    // Add a newline before if there's existing content
+                    if !blockquote_content.is_empty() && !blockquote_content.ends_with('\n') {
+                        blockquote_content.push('\n');
+                    }
+                    current_heading_level = Some(heading_level_to_u8(level));
+                } else {
+                    flush_text(&mut current_text, &mut blocks);
+                    current_heading_level = Some(heading_level_to_u8(level));
+                }
             }
             Event::End(TagEnd::Heading(_)) => {
                 if let Some(level) = current_heading_level.take() {
-                    let text = std::mem::take(&mut current_text).trim().to_string();
-                    if !text.is_empty() {
-                        blocks.push(ContentBlock::Heading { level, text });
+                    if in_blockquote {
+                        // Add heading text with markdown bold markers for rendering
+                        let text = std::mem::take(&mut current_text).trim().to_string();
+                        if !text.is_empty() {
+                            blockquote_content.push_str("**");
+                            blockquote_content.push_str(&text);
+                            blockquote_content.push_str("**\n\n");
+                        }
+                    } else {
+                        let text = std::mem::take(&mut current_text).trim().to_string();
+                        if !text.is_empty() {
+                            blocks.push(ContentBlock::Heading { level, text });
+                        }
                     }
                 }
             }
@@ -75,7 +94,7 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
             Event::End(TagEnd::Paragraph) => {
                 if in_blockquote {
                     blockquote_content.push_str(&current_text);
-                    blockquote_content.push('\n');
+                    blockquote_content.push_str("\n\n"); // Double newline for paragraph break
                     current_text.clear();
                 } else if in_list {
                     current_list_item.push_str(&current_text);
@@ -107,21 +126,41 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
             }
 
             Event::Start(Tag::List(first_item)) => {
-                flush_text(&mut current_text, &mut blocks);
-                in_list = true;
-                list_ordered = first_item.is_some();
-                list_items.clear();
+                if in_blockquote {
+                    // Lists inside blockquotes are rendered as formatted text
+                    in_list = true;
+                    list_ordered = first_item.is_some();
+                    list_items.clear();
+                } else {
+                    flush_text(&mut current_text, &mut blocks);
+                    in_list = true;
+                    list_ordered = first_item.is_some();
+                    list_items.clear();
+                }
             }
             Event::End(TagEnd::List(_)) => {
-                in_list = false;
-                let items = std::mem::take(&mut list_items);
-                if !items.is_empty() {
-                    if list_ordered {
-                        blocks.push(ContentBlock::OrderedList(items));
-                    } else {
-                        blocks.push(ContentBlock::UnorderedList(items));
+                if in_blockquote {
+                    // Add list items to blockquote content
+                    for (i, item) in list_items.iter().enumerate() {
+                        if list_ordered {
+                            blockquote_content.push_str(&format!("{}. {}\n", i + 1, item));
+                        } else {
+                            blockquote_content.push_str(&format!("• {}\n", item));
+                        }
+                    }
+                    blockquote_content.push('\n'); // Extra newline after list
+                    list_items.clear();
+                } else {
+                    let items = std::mem::take(&mut list_items);
+                    if !items.is_empty() {
+                        if list_ordered {
+                            blocks.push(ContentBlock::OrderedList(items));
+                        } else {
+                            blocks.push(ContentBlock::UnorderedList(items));
+                        }
                     }
                 }
+                in_list = false;
             }
 
             Event::Start(Tag::Item) => {
@@ -210,6 +249,10 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
                     current_cell.push_str(&text);
                 } else if in_list {
                     current_list_item.push_str(&text);
+                } else if in_blockquote && current_heading_level.is_some() {
+                    // Inside a heading within a blockquote - collect in current_text
+                    // so we can format it with bold when the heading ends
+                    current_text.push_str(&text);
                 } else if in_blockquote {
                     blockquote_content.push_str(&text);
                 } else if in_caption {
@@ -1294,5 +1337,40 @@ Let's say you have a variable."#;
             "Expected paragraph with 'variable', got {:?}",
             blocks[1]
         );
+    }
+
+    #[test]
+    fn blockquote_with_heading_paragraphs_and_list() {
+        // This matches the actual Rust book format for callouts like "Integer Overflow"
+        let md = r#"> ##### Integer Overflow
+>
+> Let's say you have a `u8` variable that can hold values between 0 and 255.
+>
+> - Wrap in all modes with the `wrapping_*` methods
+> - Return the None value if there is overflow"#;
+        let blocks = parse_markdown_content(md);
+
+        // Should have exactly one blockquote containing everything
+        assert_eq!(blocks.len(), 1, "Expected 1 block, got {:?}", blocks);
+
+        if let ContentBlock::Blockquote(text) = &blocks[0] {
+            // Heading should be bold
+            assert!(text.contains("**Integer Overflow**"), "Expected bold heading, got: {}", text);
+            // Paragraph content should be present
+            assert!(text.contains("`u8`"), "Expected inline code in paragraph, got: {}", text);
+            // List items should be formatted with bullets
+            assert!(
+                text.contains("• Wrap") || text.contains("- Wrap"),
+                "Expected bullet list, got: {}",
+                text
+            );
+            assert!(
+                text.contains("• Return") || text.contains("- Return"),
+                "Expected second bullet, got: {}",
+                text
+            );
+        } else {
+            panic!("Expected blockquote, got {:?}", blocks[0]);
+        }
     }
 }
