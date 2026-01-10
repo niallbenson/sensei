@@ -32,11 +32,42 @@ pub struct PanelVisibility {
     pub curriculum: bool,
     /// Show the notes (right) panel
     pub notes: bool,
+    /// Curriculum panel width as percentage (10-50)
+    pub curriculum_width_percent: u16,
+    /// Notes panel width as percentage (10-50)
+    pub notes_width_percent: u16,
 }
 
 impl Default for PanelVisibility {
     fn default() -> Self {
-        Self { curriculum: true, notes: false }
+        Self {
+            curriculum: true,
+            notes: false,
+            curriculum_width_percent: 20,
+            notes_width_percent: 25,
+        }
+    }
+}
+
+impl PanelVisibility {
+    /// Increase curriculum panel width
+    pub fn increase_curriculum_width(&mut self) {
+        self.curriculum_width_percent = (self.curriculum_width_percent + 5).min(50);
+    }
+
+    /// Decrease curriculum panel width
+    pub fn decrease_curriculum_width(&mut self) {
+        self.curriculum_width_percent = (self.curriculum_width_percent.saturating_sub(5)).max(10);
+    }
+
+    /// Increase notes panel width
+    pub fn increase_notes_width(&mut self) {
+        self.notes_width_percent = (self.notes_width_percent + 5).min(50);
+    }
+
+    /// Decrease notes panel width
+    pub fn decrease_notes_width(&mut self) {
+        self.notes_width_percent = (self.notes_width_percent.saturating_sub(5)).max(10);
     }
 }
 

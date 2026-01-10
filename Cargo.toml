@@ -17,7 +17,7 @@ ratatui = { version = "0.29", features = ["serde"] }
 crossterm = "0.28"
 
 # Syntax highlighting
-syntect = "5"
+syntect = { version = "5.1.0", features = ["default-fancy", "default-onig", "default-syntaxes", "default-themes", "parsing", "regex-fancy"], default-features = false }
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
@@ -45,6 +45,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # CLI
 clap = { version = "4", features = ["derive"] }
+textwrap = "0.16.2"
+once_cell = "1.21.3"
+regex = "1.12.2"
 
 [dev-dependencies]
 pretty_assertions = "1"

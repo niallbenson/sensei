@@ -10,6 +10,7 @@ use ratatui::{
 
 use crate::app::state::AppState;
 use crate::book::ContentBlock;
+use crate::syntax;
 use crate::theme::Theme;
 
 /// Draw the content panel with section content
@@ -484,13 +485,12 @@ fn render_code_block(lines: &mut Vec<Line<'static>>, code: &crate::book::CodeBlo
         Span::styled(" ─".to_string(), Style::default().fg(theme.border)),
     ]));
 
-    // Code content with basic syntax highlighting
+    // Code content with syntax highlighting
     for line in code.code.lines() {
-        let styled_line = highlight_code_line(line, code.language.as_deref(), theme);
-        lines.push(Line::from(vec![
-            Span::styled("│ ", Style::default().fg(theme.border)),
-            Span::styled(styled_line, Style::default().bg(theme.bg_secondary)),
-        ]));
+        let mut line_spans = vec![Span::styled("│ ", Style::default().fg(theme.border))];
+        let highlighted_spans = syntax::highlight_line(line, code.language.as_deref(), theme);
+        line_spans.extend(highlighted_spans);
+        lines.push(Line::from(line_spans));
     }
 
     // Bottom border
@@ -498,11 +498,11 @@ fn render_code_block(lines: &mut Vec<Line<'static>>, code: &crate::book::CodeBlo
     lines.push(Line::from(""));
 }
 
-/// Basic syntax highlighting for a code line
+/// Basic syntax highlighting for a code line (kept for backward compatibility in tests)
+#[allow(dead_code)]
 fn highlight_code_line(line: &str, language: Option<&str>, theme: &Theme) -> String {
-    // For now, just return the line as-is
-    // Future: integrate with syntect for proper highlighting
-    let _ = (language, theme); // suppress unused warnings
+    // This is now just a stub for tests - actual highlighting is done by syntax module
+    let _ = (language, theme);
     line.to_string()
 }
 

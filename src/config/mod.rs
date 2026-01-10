@@ -1,6 +1,7 @@
 //! Configuration management for Sensei
 
 pub mod progress;
+pub mod session;
 
 use std::path::PathBuf;
 

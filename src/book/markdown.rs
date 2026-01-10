@@ -45,6 +45,7 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
     let mut table_alignments: Vec<Alignment> = Vec::new();
 
     let mut current_heading_level: Option<u8> = None;
+    let mut in_html_comment = false;
 
     for event in parser {
         match event {
@@ -249,10 +250,24 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
             // Links - extract text only
             Event::Start(Tag::Link { .. }) | Event::End(TagEnd::Link) => {}
 
-            // Handle HTML - extract text content, ignore tags
+            // Handle HTML - extract text content, ignore tags and comments
             Event::Html(html) | Event::InlineHtml(html) => {
+                let html_str = html.as_ref();
+
+                // Track HTML comment blocks (may span multiple events)
+                if html_str.contains("<!--") {
+                    in_html_comment = true;
+                }
+                if html_str.contains("-->") {
+                    in_html_comment = false;
+                    continue; // Skip the closing part of comment
+                }
+                if in_html_comment {
+                    continue; // Skip content inside HTML comments
+                }
+
                 // Extract any visible text from HTML, skip tags
-                let text = html
+                let text = html_str
                     .replace("&vert;", "|")
                     .replace("&lt;", "<")
                     .replace("&gt;", ">")
@@ -326,10 +341,14 @@ pub fn parse_markdown_file(path: &Path, section_number: usize) -> Result<Section
     let content = fs::read_to_string(path)
         .with_context(|| format!("Failed to read markdown file: {}", path.display()))?;
 
+    // Preprocess to resolve mdBook include directives
+    let base_dir = path.parent().unwrap_or(Path::new("."));
+    let processed_content = preprocess_mdbook_includes(&content, base_dir);
+
     let filename = path.file_stem().unwrap_or_default().to_string_lossy();
 
     // Try to extract title from first heading
-    let blocks = parse_markdown_content(&content);
+    let blocks = parse_markdown_content(&processed_content);
     let title = blocks
         .iter()
         .find_map(|b| {
@@ -346,6 +365,176 @@ pub fn parse_markdown_file(path: &Path, section_number: usize) -> Result<Section
     section.calculate_reading_time();
 
     Ok(section)
+}
+
+/// Preprocess mdBook include directives
+/// Handles: {{#include path}}, {{#rustdoc_include path}}, with optional anchors
+fn preprocess_mdbook_includes(content: &str, base_dir: &Path) -> String {
+    use regex::Regex;
+
+    // Match {{#include path}} and {{#rustdoc_include path}} patterns
+    let include_re = Regex::new(r"\{\{#(include|rustdoc_include)\s+([^}]+)\}\}").unwrap();
+
+    let mut result = content.to_string();
+
+    // Process all includes (may need multiple passes for nested includes)
+    for _ in 0..5 {
+        // Limit recursion depth
+        let new_result = include_re
+            .replace_all(&result, |caps: &regex::Captures| {
+                let include_type = caps.get(1).map(|m| m.as_str()).unwrap_or("include");
+                let path_spec = caps.get(2).map(|m| m.as_str().trim()).unwrap_or("");
+
+                resolve_include(base_dir, path_spec, include_type == "rustdoc_include")
+            })
+            .to_string();
+
+        if new_result == result {
+            break; // No more changes
+        }
+        result = new_result;
+    }
+
+    result
+}
+
+/// Resolve a single include directive
+fn resolve_include(base_dir: &Path, path_spec: &str, is_rustdoc: bool) -> String {
+    // Parse path specification: path/to/file.rs:anchor or path/to/file.rs:start:end
+    let (file_path, anchor) = if let Some(idx) = path_spec.find(':') {
+        (&path_spec[..idx], Some(&path_spec[idx + 1..]))
+    } else {
+        (path_spec, None)
+    };
+
+    let full_path = base_dir.join(file_path);
+
+    // Try to read the file
+    let file_content = match fs::read_to_string(&full_path) {
+        Ok(content) => content,
+        Err(_) => {
+            // File not found - return a placeholder with the original directive
+            return format!("// File not found: {}", file_path);
+        }
+    };
+
+    // Extract the relevant portion based on anchor
+
+    if let Some(anchor) = anchor {
+        extract_anchored_content(&file_content, anchor, is_rustdoc)
+    } else if is_rustdoc {
+        filter_rustdoc_hidden(&file_content)
+    } else {
+        file_content
+    }
+}
+
+/// Extract content between anchor markers or line ranges
+fn extract_anchored_content(content: &str, anchor: &str, is_rustdoc: bool) -> String {
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Check if anchor is a line range like "start:end" or just "anchor_name"
+    if let Some(colon_idx) = anchor.find(':') {
+        // Line range: start:end (but could also be anchor:subanchor)
+        let start_part = &anchor[..colon_idx];
+        let end_part = &anchor[colon_idx + 1..];
+
+        // Try to parse as numbers first
+        if let (Ok(start), Ok(end)) = (start_part.parse::<usize>(), end_part.parse::<usize>()) {
+            let start = start.saturating_sub(1); // Convert to 0-indexed
+            let extracted: Vec<&str> = lines.into_iter().skip(start).take(end - start).collect();
+            let result = extracted.join("\n");
+            return if is_rustdoc { filter_rustdoc_hidden(&result) } else { result };
+        }
+    }
+
+    // Try to find anchor markers: ANCHOR: name and ANCHOR_END: name
+    // Or for rustdoc_include: specific named anchors
+    let anchor_start = format!("ANCHOR: {}", anchor);
+    let anchor_end = format!("ANCHOR_END: {}", anchor);
+
+    let mut in_anchor = false;
+    let mut extracted_lines = Vec::new();
+
+    for line in &lines {
+        if line.contains(&anchor_start) {
+            in_anchor = true;
+            continue;
+        }
+        if line.contains(&anchor_end) {
+            in_anchor = false;
+            continue;
+        }
+        if in_anchor {
+            extracted_lines.push(*line);
+        }
+    }
+
+    // If no anchor markers found, try special rustdoc anchors like "main", "all", "io", etc.
+    if extracted_lines.is_empty() {
+        // For simple anchors like "main", "all", "io", "print", "string"
+        // these typically mean extract specific portions based on common patterns
+        match anchor {
+            "all" => {
+                // Return entire file
+                let result = lines.join("\n");
+                return if is_rustdoc { filter_rustdoc_hidden(&result) } else { result };
+            }
+            "main" => {
+                // Extract the main function
+                return extract_function(&lines, "fn main", is_rustdoc);
+            }
+            _ => {
+                // For other anchors, return the whole file filtered
+                let result = lines.join("\n");
+                return if is_rustdoc { filter_rustdoc_hidden(&result) } else { result };
+            }
+        }
+    }
+
+    let result = extracted_lines.join("\n");
+    if is_rustdoc { filter_rustdoc_hidden(&result) } else { result }
+}
+
+/// Extract a function from code
+fn extract_function(lines: &[&str], fn_start: &str, is_rustdoc: bool) -> String {
+    let mut in_function = false;
+    let mut brace_count = 0;
+    let mut extracted = Vec::new();
+
+    for line in lines {
+        if !in_function && line.contains(fn_start) {
+            in_function = true;
+        }
+
+        if in_function {
+            extracted.push(*line);
+            brace_count += line.chars().filter(|&c| c == '{').count();
+            brace_count = brace_count.saturating_sub(line.chars().filter(|&c| c == '}').count());
+
+            if brace_count == 0 && !extracted.is_empty() {
+                break;
+            }
+        }
+    }
+
+    let result = extracted.join("\n");
+    if is_rustdoc { filter_rustdoc_hidden(&result) } else { result }
+}
+
+/// Filter out rustdoc hidden lines (lines starting with # in doc examples)
+fn filter_rustdoc_hidden(content: &str) -> String {
+    content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            // Keep lines that don't start with # (hidden marker in rustdoc)
+            // But keep lines that are just "#" (empty hidden) or "# " followed by code
+            // Actually in rustdoc, # at start of line in code blocks hides the line
+            !trimmed.starts_with("# ") && trimmed != "#"
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Parse a directory of markdown files into a book
@@ -857,5 +1046,39 @@ fn main() {}
         flush_text(&mut text, &mut blocks);
         assert_eq!(blocks.len(), 1);
         assert!(matches!(&blocks[0], ContentBlock::Paragraph(t) if t == "Hello world"));
+    }
+
+    #[test]
+    fn skip_html_comments() {
+        let md = r#"Some text.
+
+<!-- manual-regeneration
+cd some/directory
+rm -rf something
+cargo build
+-->
+
+More text after comment."#;
+        let blocks = parse_markdown_content(md);
+        // Should have only two paragraphs, no content from the HTML comment
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(&blocks[0], ContentBlock::Paragraph(t) if t == "Some text."));
+        assert!(
+            matches!(&blocks[1], ContentBlock::Paragraph(t) if t == "More text after comment.")
+        );
+    }
+
+    #[test]
+    fn skip_inline_html_comment() {
+        let md = "Text before <!-- comment --> text after.";
+        let blocks = parse_markdown_content(md);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::Paragraph(text) = &blocks[0] {
+            assert!(!text.contains("comment"));
+            assert!(text.contains("Text before"));
+            assert!(text.contains("text after"));
+        } else {
+            panic!("Expected paragraph");
+        }
     }
 }

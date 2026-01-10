@@ -5,8 +5,9 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph},
 };
+use textwrap::{Options, wrap};
 
 use crate::app::state::AppState;
 use crate::config::progress::Progress;
@@ -48,13 +49,14 @@ pub fn draw_with_progress(
     // If no book loaded, show message
     let Some(book) = &state.book else {
         let msg = Paragraph::new("No book loaded\n\nAdd a book with:\nsensei add <path>")
-            .style(Style::default().fg(theme.fg_muted))
-            .wrap(Wrap { trim: true });
+            .style(Style::default().fg(theme.fg_muted));
         frame.render_widget(msg, inner);
         return;
     };
 
-    // Build curriculum tree
+    let width = inner.width as usize;
+
+    // Build curriculum tree with text wrapping
     let mut lines: Vec<Line> = Vec::new();
     let mut flat_index = 0;
 
@@ -65,8 +67,8 @@ pub fn draw_with_progress(
         // Check if this chapter row is selected
         let is_chapter_selected = flat_index == state.curriculum.selected_index;
 
-        // Chapter line
-        let chapter_text = format!("{} {}. {}", expand_icon, chapter.number, chapter.title);
+        // Chapter prefix and text
+        let prefix = format!("{} {}. ", expand_icon, chapter.number);
         let chapter_style = if is_chapter_selected && focused {
             Style::default()
                 .fg(theme.bg_primary)
@@ -75,7 +77,24 @@ pub fn draw_with_progress(
         } else {
             Style::default().fg(theme.fg_primary)
         };
-        lines.push(Line::from(Span::styled(chapter_text, chapter_style)));
+
+        // Wrap the chapter title
+        let wrapped_lines = wrap_with_indent(&chapter.title, width, prefix.len());
+        for (i, line_text) in wrapped_lines.iter().enumerate() {
+            if i == 0 {
+                lines.push(Line::from(Span::styled(
+                    format!("{}{}", prefix, line_text),
+                    chapter_style,
+                )));
+            } else {
+                // Continuation lines with indent
+                let indent = " ".repeat(prefix.len());
+                lines.push(Line::from(Span::styled(
+                    format!("{}{}", indent, line_text),
+                    chapter_style,
+                )));
+            }
+        }
         flat_index += 1;
 
         // Sections (if expanded)
@@ -86,10 +105,9 @@ pub fn draw_with_progress(
                 // Get status from progress if available
                 let status = get_section_status(progress, &book.metadata.id, &section.path);
 
-                let section_text = format!(
-                    "   {} {}.{} {}",
-                    status, chapter.number, section.number, section.title
-                );
+                // Section prefix with indent
+                let section_prefix =
+                    format!("   {} {}.{} ", status, chapter.number, section.number);
 
                 let section_style = if is_section_selected && focused {
                     Style::default()
@@ -105,7 +123,23 @@ pub fn draw_with_progress(
                     Style::default().fg(theme.fg_secondary)
                 };
 
-                lines.push(Line::from(Span::styled(section_text, section_style)));
+                // Wrap the section title
+                let wrapped_lines = wrap_with_indent(&section.title, width, section_prefix.len());
+                for (i, line_text) in wrapped_lines.iter().enumerate() {
+                    if i == 0 {
+                        lines.push(Line::from(Span::styled(
+                            format!("{}{}", section_prefix, line_text),
+                            section_style,
+                        )));
+                    } else {
+                        // Continuation lines with indent
+                        let indent = " ".repeat(section_prefix.len());
+                        lines.push(Line::from(Span::styled(
+                            format!("{}{}", indent, line_text),
+                            section_style,
+                        )));
+                    }
+                }
                 flat_index += 1;
             }
         }
@@ -119,6 +153,21 @@ pub fn draw_with_progress(
 
     let curriculum = Paragraph::new(visible_lines);
     frame.render_widget(curriculum, inner);
+}
+
+/// Wrap text with a given indent for continuation lines
+fn wrap_with_indent(text: &str, width: usize, indent: usize) -> Vec<String> {
+    if width <= indent {
+        return vec![text.to_string()];
+    }
+
+    let content_width = width.saturating_sub(indent);
+    if content_width == 0 {
+        return vec![text.to_string()];
+    }
+
+    let options = Options::new(content_width);
+    wrap(text, options).into_iter().map(|s| s.to_string()).collect()
 }
 
 /// Get the status indicator for a section based on progress

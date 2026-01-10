@@ -26,6 +26,9 @@ pub fn vim_key_to_action(key: KeyCode) -> Option<Action> {
         KeyCode::Char(']') | KeyCode::Char('3') => Some(Action::ToggleNotes),
         // Mark complete
         KeyCode::Char('m') => Some(Action::MarkComplete),
+        // Panel resize
+        KeyCode::Char('<') => Some(Action::DecreasePanelWidth),
+        KeyCode::Char('>') => Some(Action::IncreasePanelWidth),
         _ => None,
     }
 }
@@ -72,6 +75,8 @@ pub enum Action {
     // Panel management
     ToggleCurriculum,
     ToggleNotes,
+    IncreasePanelWidth,
+    DecreasePanelWidth,
 
     // Progress
     MarkComplete,
