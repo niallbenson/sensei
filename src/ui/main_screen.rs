@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use super::{content, curriculum};
+use super::{command_line, content, curriculum};
 use crate::app::state::{AppState, Panel};
 use crate::config::progress::Progress;
 use crate::theme::Theme;
@@ -16,11 +16,20 @@ use crate::theme::Theme;
 const CURRICULUM_MIN_WIDTH: u16 = 20;
 
 /// Draw the main reading screen
-pub fn draw(frame: &mut Frame, state: &AppState, theme: &Theme, progress: &Progress) {
+pub fn draw(frame: &mut Frame, state: &mut AppState, theme: &Theme, progress: &Progress) {
     let area = frame.area();
 
-    // Calculate panel layout
-    let chunks = create_layout(area, state);
+    // Split vertically: main area and command line
+    let vertical_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(3), Constraint::Length(1)])
+        .split(area);
+
+    let main_area = vertical_chunks[0];
+    let command_area = vertical_chunks[1];
+
+    // Calculate panel layout for main area
+    let chunks = create_layout(main_area, state);
 
     // Draw each visible panel
     let mut panel_index = 0;
@@ -55,6 +64,9 @@ pub fn draw(frame: &mut Frame, state: &AppState, theme: &Theme, progress: &Progr
             state.focused_panel == Panel::Notes,
         );
     }
+
+    // Draw command line at bottom
+    command_line::draw(frame, command_area, &state.command_line, theme);
 }
 
 /// Create the layout constraints based on visible panels
@@ -83,7 +95,7 @@ fn create_layout(area: Rect, state: &AppState) -> Vec<Rect> {
 fn draw_curriculum_panel(
     frame: &mut Frame,
     area: Rect,
-    state: &AppState,
+    state: &mut AppState,
     theme: &Theme,
     focused: bool,
     progress: &Progress,
@@ -95,7 +107,7 @@ fn draw_curriculum_panel(
 fn draw_content_panel(
     frame: &mut Frame,
     area: Rect,
-    state: &AppState,
+    state: &mut AppState,
     theme: &Theme,
     focused: bool,
 ) {

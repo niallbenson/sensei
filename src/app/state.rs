@@ -49,6 +49,23 @@ pub struct CurriculumState {
     pub expanded_chapters: HashSet<usize>,
     /// Scroll offset for long curricula
     pub scroll_offset: usize,
+    /// Visible height in items (updated on render)
+    pub visible_height: usize,
+}
+
+impl CurriculumState {
+    /// Ensure the selected item is visible by adjusting scroll offset
+    pub fn ensure_selection_visible(&mut self) {
+        // Don't scroll past the selection (top)
+        if self.selected_index < self.scroll_offset {
+            self.scroll_offset = self.selected_index;
+        }
+        // Don't let selection go below visible area (bottom)
+        let visible = self.visible_height.saturating_sub(2);
+        if visible > 0 && self.selected_index >= self.scroll_offset + visible {
+            self.scroll_offset = self.selected_index.saturating_sub(visible) + 1;
+        }
+    }
 }
 
 /// State for content rendering
@@ -58,10 +75,27 @@ pub struct ContentState {
     pub scroll_offset: usize,
     /// Total rendered lines (updated on render)
     pub total_lines: usize,
+    /// Visible height in lines (updated on render)
+    pub visible_height: usize,
     /// Line indices that match current search
     pub search_matches: Vec<usize>,
     /// Currently highlighted match index
     pub current_match: Option<usize>,
+}
+
+impl ContentState {
+    /// Get the maximum allowed scroll offset
+    pub fn max_scroll(&self) -> usize {
+        self.total_lines.saturating_sub(self.visible_height / 2)
+    }
+
+    /// Clamp scroll offset to valid range
+    pub fn clamp_scroll(&mut self) {
+        let max = self.max_scroll();
+        if self.scroll_offset > max {
+            self.scroll_offset = max;
+        }
+    }
 }
 
 /// State for search mode
@@ -71,6 +105,182 @@ pub struct SearchState {
     pub active: bool,
     /// Current search query
     pub query: String,
+}
+
+/// Command line mode
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum CommandMode {
+    /// Normal mode - command line hidden or showing status
+    #[default]
+    Normal,
+    /// Command mode - accepting : commands
+    Command,
+    /// Search mode - accepting / search queries
+    Search,
+}
+
+/// State for the command line input
+#[derive(Debug, Clone, Default)]
+pub struct CommandLineState {
+    /// Current mode
+    pub mode: CommandMode,
+    /// Input buffer
+    pub input: String,
+    /// Cursor position in input
+    pub cursor: usize,
+    /// Status/error message to display (when not in input mode)
+    pub message: Option<String>,
+    /// Whether message is an error
+    pub is_error: bool,
+    /// Command history
+    pub history: Vec<String>,
+    /// Current history index when navigating
+    pub history_index: Option<usize>,
+}
+
+impl CommandLineState {
+    /// Start command mode
+    pub fn enter_command_mode(&mut self) {
+        self.mode = CommandMode::Command;
+        self.input.clear();
+        self.cursor = 0;
+        self.message = None;
+        self.history_index = None;
+    }
+
+    /// Start search mode
+    pub fn enter_search_mode(&mut self) {
+        self.mode = CommandMode::Search;
+        self.input.clear();
+        self.cursor = 0;
+        self.message = None;
+        self.history_index = None;
+    }
+
+    /// Exit input mode
+    pub fn exit_input_mode(&mut self) {
+        self.mode = CommandMode::Normal;
+        self.input.clear();
+        self.cursor = 0;
+    }
+
+    /// Set a status message
+    pub fn set_message(&mut self, msg: impl Into<String>) {
+        self.message = Some(msg.into());
+        self.is_error = false;
+    }
+
+    /// Set an error message
+    pub fn set_error(&mut self, msg: impl Into<String>) {
+        self.message = Some(msg.into());
+        self.is_error = true;
+    }
+
+    /// Clear the message
+    pub fn clear_message(&mut self) {
+        self.message = None;
+    }
+
+    /// Insert a character at cursor
+    pub fn insert_char(&mut self, c: char) {
+        self.input.insert(self.cursor, c);
+        self.cursor += 1;
+    }
+
+    /// Delete character before cursor
+    pub fn delete_char(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+            self.input.remove(self.cursor);
+        }
+    }
+
+    /// Delete character at cursor
+    pub fn delete_char_forward(&mut self) {
+        if self.cursor < self.input.len() {
+            self.input.remove(self.cursor);
+        }
+    }
+
+    /// Move cursor left
+    pub fn move_left(&mut self) {
+        if self.cursor > 0 {
+            self.cursor -= 1;
+        }
+    }
+
+    /// Move cursor right
+    pub fn move_right(&mut self) {
+        if self.cursor < self.input.len() {
+            self.cursor += 1;
+        }
+    }
+
+    /// Move cursor to start
+    pub fn move_start(&mut self) {
+        self.cursor = 0;
+    }
+
+    /// Move cursor to end
+    pub fn move_end(&mut self) {
+        self.cursor = self.input.len();
+    }
+
+    /// Get the current input with prefix
+    pub fn display_text(&self) -> String {
+        match self.mode {
+            CommandMode::Normal => self.message.clone().unwrap_or_default(),
+            CommandMode::Command => format!(":{}", self.input),
+            CommandMode::Search => format!("/{}", self.input),
+        }
+    }
+
+    /// Check if we're in input mode
+    pub fn is_input_mode(&self) -> bool {
+        matches!(self.mode, CommandMode::Command | CommandMode::Search)
+    }
+
+    /// Add to history
+    pub fn add_to_history(&mut self, cmd: String) {
+        if !cmd.is_empty() && self.history.last() != Some(&cmd) {
+            self.history.push(cmd);
+        }
+    }
+
+    /// Navigate history up
+    pub fn history_up(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+        match self.history_index {
+            None => {
+                self.history_index = Some(self.history.len() - 1);
+            }
+            Some(i) if i > 0 => {
+                self.history_index = Some(i - 1);
+            }
+            _ => {}
+        }
+        if let Some(i) = self.history_index {
+            self.input = self.history[i].clone();
+            self.cursor = self.input.len();
+        }
+    }
+
+    /// Navigate history down
+    pub fn history_down(&mut self) {
+        if let Some(i) = self.history_index {
+            if i + 1 < self.history.len() {
+                self.history_index = Some(i + 1);
+                self.input = self.history[i + 1].clone();
+                self.cursor = self.input.len();
+            } else {
+                self.history_index = None;
+                self.input.clear();
+                self.cursor = 0;
+            }
+        }
+    }
 }
 
 /// State for the landing animation
@@ -178,4 +388,7 @@ pub struct AppState {
 
     /// Search state
     pub search: SearchState,
+
+    /// Command line state
+    pub command_line: CommandLineState,
 }

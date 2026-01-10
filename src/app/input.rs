@@ -9,10 +9,10 @@ pub fn vim_key_to_action(key: KeyCode) -> Option<Action> {
         KeyCode::Char('k') | KeyCode::Up => Some(Action::Up),
         KeyCode::Char('h') | KeyCode::Left => Some(Action::Left),
         KeyCode::Char('l') | KeyCode::Right => Some(Action::Right),
-        KeyCode::Char('g') => Some(Action::Top),
-        KeyCode::Char('G') => Some(Action::Bottom),
-        KeyCode::Char('d') => Some(Action::PageDown),
-        KeyCode::Char('u') => Some(Action::PageUp),
+        KeyCode::Char('g') | KeyCode::Home => Some(Action::Top),
+        KeyCode::Char('G') | KeyCode::End => Some(Action::Bottom),
+        KeyCode::Char('d') | KeyCode::PageDown => Some(Action::PageDown),
+        KeyCode::Char('u') | KeyCode::PageUp => Some(Action::PageUp),
         KeyCode::Enter => Some(Action::Select),
         KeyCode::Esc => Some(Action::Back),
         KeyCode::Char('/') => Some(Action::Search),
@@ -20,7 +20,7 @@ pub fn vim_key_to_action(key: KeyCode) -> Option<Action> {
         KeyCode::Char('N') => Some(Action::PrevMatch),
         KeyCode::Char('v') => Some(Action::VisualMode),
         KeyCode::Char('?') => Some(Action::Help),
-        KeyCode::Char('q') => Some(Action::Quit),
+        // Note: 'q' intentionally not mapped - use :q command to quit
         // Panel toggles
         KeyCode::Char('[') | KeyCode::Char('1') => Some(Action::ToggleCurriculum),
         KeyCode::Char(']') | KeyCode::Char('3') => Some(Action::ToggleNotes),
