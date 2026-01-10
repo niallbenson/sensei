@@ -416,7 +416,8 @@ mod tests {
     #[test]
     fn set_base_path_clears_cache() {
         let mut cache = ImageCache::default();
-        cache.base_path = Some(PathBuf::from("/old/path"));
+        // Set initial path, then change it to trigger cache clear
+        cache.set_base_path(PathBuf::from("/old/path"));
         cache.set_base_path(PathBuf::from("/new/path"));
         assert!(cache.images.is_empty());
         assert!(cache.protocols.is_empty());
