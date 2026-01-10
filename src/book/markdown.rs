@@ -754,7 +754,7 @@ fn parse_mdbook_directory(path: &Path, summary_path: &Path) -> Result<Book> {
                 }
             } else if indent == 0 && trimmed.starts_with('[') {
                 // Top-level link without - (like [Foreword](foreword.md))
-                // Treat as a standalone chapter with one section
+                // These are unnumbered chapters (front matter, appendices, etc.)
                 if let Some(ch) = current_chapter.take() {
                     if !ch.sections.is_empty() {
                         book.chapters.push(ch);
@@ -762,8 +762,8 @@ fn parse_mdbook_directory(path: &Path, summary_path: &Path) -> Result<Book> {
                 }
 
                 if file_path.exists() {
-                    chapter_num += 1;
-                    let mut chapter = Chapter::new(&link_title, chapter_num, &link_path);
+                    // Don't increment chapter_num - these are unnumbered
+                    let mut chapter = Chapter::new_unnumbered(&link_title, &link_path);
                     if let Ok(section) = parse_markdown_file(&file_path, 1) {
                         chapter.sections.push(section);
                     }
