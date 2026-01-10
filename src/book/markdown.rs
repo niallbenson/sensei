@@ -226,6 +226,10 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
                     current_list_item.push('`');
                     current_list_item.push_str(&code);
                     current_list_item.push('`');
+                } else if in_blockquote {
+                    blockquote_content.push('`');
+                    blockquote_content.push_str(&code);
+                    blockquote_content.push('`');
                 } else {
                     current_text.push('`');
                     current_text.push_str(&code);
@@ -408,10 +412,15 @@ fn resolve_include(base_dir: &Path, path_spec: &str, is_rustdoc: bool) -> String
         (path_spec, None)
     };
 
+    // Early path traversal protection: block suspicious patterns before filesystem access
+    // This catches attacks even when the target file doesn't exist
+    if file_path.contains("..") || file_path.starts_with('/') || file_path.starts_with('\\') {
+        return format!("// Path traversal blocked: {}", file_path);
+    }
+
     let full_path = base_dir.join(file_path);
 
-    // Path traversal protection: ensure resolved path stays within book directory
-    // Canonicalize both paths to resolve .. and symlinks
+    // Secondary protection: canonicalize and verify path stays within book directory
     let canonical_full = match full_path.canonicalize() {
         Ok(p) => p,
         Err(_) => {
@@ -740,7 +749,14 @@ fn parse_mdbook_directory(path: &Path, summary_path: &Path) -> Result<Book> {
                 // Section within current chapter
                 if let Some(ref mut chapter) = current_chapter {
                     if file_path.exists() {
-                        let section_num = chapter.sections.len() + 1;
+                        // Section numbering: if chapter has intro (section 0), use len() directly
+                        // Otherwise use len() + 1 to start at 1
+                        let section_num = if chapter.sections.first().is_some_and(|s| s.number == 0)
+                        {
+                            chapter.sections.len() // Chapter intro is section 0, so len() gives us 1, 2, 3...
+                        } else {
+                            chapter.sections.len() + 1
+                        };
                         if let Ok(mut section) = parse_markdown_file(&file_path, section_num) {
                             // Use the title from SUMMARY.md instead of extracting from file
                             section.title = link_title;
@@ -750,7 +766,7 @@ fn parse_mdbook_directory(path: &Path, summary_path: &Path) -> Result<Book> {
                 }
             } else if indent == 0 && trimmed.starts_with('[') {
                 // Top-level link without - (like [Foreword](foreword.md))
-                // Treat as a standalone chapter with one section
+                // These are unnumbered chapters (front matter, appendices, etc.)
                 if let Some(ch) = current_chapter.take() {
                     if !ch.sections.is_empty() {
                         book.chapters.push(ch);
@@ -758,8 +774,8 @@ fn parse_mdbook_directory(path: &Path, summary_path: &Path) -> Result<Book> {
                 }
 
                 if file_path.exists() {
-                    chapter_num += 1;
-                    let mut chapter = Chapter::new(&link_title, chapter_num, &link_path);
+                    // Don't increment chapter_num - these are unnumbered
+                    let mut chapter = Chapter::new_unnumbered(&link_title, &link_path);
                     if let Ok(section) = parse_markdown_file(&file_path, 1) {
                         chapter.sections.push(section);
                     }
@@ -1166,5 +1182,76 @@ after"#;
         assert!(super::INCLUDE_RE.is_match("{{#include ../file.rs}}"));
         assert!(super::INCLUDE_RE.is_match("{{#rustdoc_include ../file.rs:anchor}}"));
         assert!(!super::INCLUDE_RE.is_match("{{#unknown ../file.rs}}"));
+    }
+
+    #[test]
+    fn blockquote_with_inline_code() {
+        let md =
+            "> Note: If you prefer not to use `rustup` for some reason, see the Other options.";
+        let blocks = parse_markdown_content(md);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::Blockquote(text) = &blocks[0] {
+            // Inline code should be in the blockquote, not separated
+            assert!(text.contains("`rustup`"), "Expected `rustup` in blockquote, got: {}", text);
+            assert!(text.contains("use `rustup` for"), "Text should flow around inline code");
+        } else {
+            panic!("Expected blockquote, got {:?}", blocks[0]);
+        }
+    }
+
+    #[test]
+    fn blockquote_with_multiple_inline_codes() {
+        let md = "> Use `cargo build` and `cargo run` to compile.";
+        let blocks = parse_markdown_content(md);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::Blockquote(text) = &blocks[0] {
+            assert!(text.contains("`cargo build`"));
+            assert!(text.contains("`cargo run`"));
+            // Both should be in the correct order
+            let build_pos = text.find("`cargo build`").unwrap();
+            let run_pos = text.find("`cargo run`").unwrap();
+            assert!(build_pos < run_pos, "cargo build should come before cargo run");
+        } else {
+            panic!("Expected blockquote");
+        }
+    }
+
+    #[test]
+    fn resolve_include_blocks_path_traversal() {
+        use std::path::Path;
+
+        let base_dir = Path::new("/tmp/book/src");
+
+        // Test parent directory traversal
+        let result = super::resolve_include(base_dir, "../../../etc/passwd", false);
+        assert!(
+            result.contains("Path traversal blocked"),
+            "Should block .. traversal, got: {}",
+            result
+        );
+
+        // Test absolute path
+        let result = super::resolve_include(base_dir, "/etc/passwd", false);
+        assert!(
+            result.contains("Path traversal blocked"),
+            "Should block absolute paths, got: {}",
+            result
+        );
+
+        // Test Windows-style absolute path
+        let result = super::resolve_include(base_dir, "\\etc\\passwd", false);
+        assert!(
+            result.contains("Path traversal blocked"),
+            "Should block backslash paths, got: {}",
+            result
+        );
+
+        // Test hidden traversal in middle of path
+        let result = super::resolve_include(base_dir, "foo/../../../etc/passwd", false);
+        assert!(
+            result.contains("Path traversal blocked"),
+            "Should block hidden .. in path, got: {}",
+            result
+        );
     }
 }

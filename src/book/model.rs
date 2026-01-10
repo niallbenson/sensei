@@ -82,8 +82,8 @@ impl Book {
 pub struct Chapter {
     /// Chapter title
     pub title: String,
-    /// Chapter number (1-indexed, for display)
-    pub number: usize,
+    /// Chapter number (1-indexed, for display). None for unnumbered chapters (e.g., Foreword)
+    pub number: Option<usize>,
     /// Path identifier (e.g., "ch01")
     pub path: String,
     /// Sections within this chapter
@@ -91,9 +91,14 @@ pub struct Chapter {
 }
 
 impl Chapter {
-    /// Create a new chapter
+    /// Create a new numbered chapter
     pub fn new(title: impl Into<String>, number: usize, path: impl Into<String>) -> Self {
-        Self { title: title.into(), number, path: path.into(), sections: Vec::new() }
+        Self { title: title.into(), number: Some(number), path: path.into(), sections: Vec::new() }
+    }
+
+    /// Create a new unnumbered chapter (e.g., Foreword, Introduction)
+    pub fn new_unnumbered(title: impl Into<String>, path: impl Into<String>) -> Self {
+        Self { title: title.into(), number: None, path: path.into(), sections: Vec::new() }
     }
 }
 

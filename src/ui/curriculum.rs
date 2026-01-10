@@ -67,8 +67,11 @@ pub fn draw_with_progress(
         // Check if this chapter row is selected
         let is_chapter_selected = flat_index == state.curriculum.selected_index;
 
-        // Chapter prefix and text
-        let prefix = format!("{} {}. ", expand_icon, chapter.number);
+        // Chapter prefix and text - only show number if chapter is numbered
+        let prefix = match chapter.number {
+            Some(num) => format!("{} {}. ", expand_icon, num),
+            None => format!("{} ", expand_icon),
+        };
         let chapter_style = if is_chapter_selected && focused {
             Style::default()
                 .fg(theme.bg_primary)
@@ -106,8 +109,13 @@ pub fn draw_with_progress(
                 let status = get_section_status(progress, &book.metadata.id, &section.path);
 
                 // Section prefix with indent
-                let section_prefix =
-                    format!("   {} {}.{} ", status, chapter.number, section.number);
+                // - For numbered chapters: show "1.1", "1.2", etc. (skip ".0" for chapter intro)
+                // - For unnumbered chapters: just show the status indicator
+                let section_prefix = match (chapter.number, section.number) {
+                    (Some(ch_num), 0) => format!("   {} {}.  ", status, ch_num), // Chapter intro
+                    (Some(ch_num), sec_num) => format!("   {} {}.{} ", status, ch_num, sec_num),
+                    (None, _) => format!("   {} ", status),
+                };
 
                 let section_style = if is_section_selected && focused {
                     Style::default()

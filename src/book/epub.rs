@@ -102,7 +102,7 @@ pub fn parse_epub_file(path: &Path) -> Result<Book> {
 
             let section_path = format!(
                 "ch{:02}/s{:02}",
-                current_chapter.as_ref().map_or(1, |c| c.number),
+                current_chapter.as_ref().map_or(1, |c| c.number.unwrap_or(1)),
                 section_num
             );
 
