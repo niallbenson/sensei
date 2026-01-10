@@ -744,7 +744,14 @@ fn parse_mdbook_directory(path: &Path, summary_path: &Path) -> Result<Book> {
                 // Section within current chapter
                 if let Some(ref mut chapter) = current_chapter {
                     if file_path.exists() {
-                        let section_num = chapter.sections.len() + 1;
+                        // Section numbering: if chapter has intro (section 0), use len() directly
+                        // Otherwise use len() + 1 to start at 1
+                        let section_num = if chapter.sections.first().is_some_and(|s| s.number == 0)
+                        {
+                            chapter.sections.len() // Chapter intro is section 0, so len() gives us 1, 2, 3...
+                        } else {
+                            chapter.sections.len() + 1
+                        };
                         if let Ok(mut section) = parse_markdown_file(&file_path, section_num) {
                             // Use the title from SUMMARY.md instead of extracting from file
                             section.title = link_title;

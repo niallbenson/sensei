@@ -108,10 +108,13 @@ pub fn draw_with_progress(
                 // Get status from progress if available
                 let status = get_section_status(progress, &book.metadata.id, &section.path);
 
-                // Section prefix with indent - only show chapter number if chapter is numbered
-                let section_prefix = match chapter.number {
-                    Some(ch_num) => format!("   {} {}.{} ", status, ch_num, section.number),
-                    None => format!("   {} ", status),
+                // Section prefix with indent
+                // - For numbered chapters: show "1.1", "1.2", etc. (skip ".0" for chapter intro)
+                // - For unnumbered chapters: just show the status indicator
+                let section_prefix = match (chapter.number, section.number) {
+                    (Some(ch_num), 0) => format!("   {} {}.  ", status, ch_num), // Chapter intro
+                    (Some(ch_num), sec_num) => format!("   {} {}.{} ", status, ch_num, sec_num),
+                    (None, _) => format!("   {} ", status),
                 };
 
                 let section_style = if is_section_selected && focused {
