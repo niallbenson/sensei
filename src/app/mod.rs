@@ -1333,6 +1333,10 @@ impl App {
                 self.explain_section(topic.as_deref());
                 Ok(false)
             }
+            Command::AskSelection(question) => {
+                self.ask_about_selection(&question);
+                Ok(false)
+            }
         }
     }
 
@@ -1454,6 +1458,135 @@ impl App {
         let messages = vec![crate::claude::Message::user(&prompt)];
         let request = crate::claude::CreateMessageRequest::new(self.state.claude.model, messages)
             .with_system("You are an expert tutor helping someone understand technical content from a book. Explain concepts clearly and concisely.");
+
+        // Create channel and cancellation token
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+
+        self.claude_rx = Some(rx);
+        self.claude_cancel = Some(cancel_token.clone());
+
+        // Spawn the streaming task
+        tokio::spawn(async move {
+            if let Err(e) = client.send_streaming(request, tx, cancel_token).await {
+                tracing::error!("Claude API error: {}", e);
+            }
+        });
+    }
+
+    /// Get currently selected text (if in visual mode with selection)
+    fn get_selected_text(&self) -> Option<String> {
+        if !self.state.visual_mode.active {
+            return None;
+        }
+
+        let book = self.state.book.as_ref()?;
+        let section = book.get_section(self.state.current_chapter, self.state.current_section)?;
+
+        let (start_block, start_char, end_block, end_char) = self
+            .state
+            .visual_mode
+            .selection_range(self.state.content.cursor_block, self.state.content.cursor_char);
+
+        // Helper to extract text from a block
+        fn block_text(block: &crate::book::ContentBlock) -> Option<String> {
+            match block {
+                crate::book::ContentBlock::Paragraph(text) => Some(text.clone()),
+                crate::book::ContentBlock::Blockquote(text) => Some(text.clone()),
+                crate::book::ContentBlock::Heading { text, .. } => Some(text.clone()),
+                crate::book::ContentBlock::Code(code_block) => Some(code_block.code.clone()),
+                crate::book::ContentBlock::UnorderedList(items) => Some(items.join("\n")),
+                crate::book::ContentBlock::OrderedList(items) => Some(items.join("\n")),
+                _ => None,
+            }
+        }
+
+        // For single-block selection
+        if start_block == end_block {
+            let text = block_text(section.content.get(start_block)?)?;
+            Some(text.chars().skip(start_char).take(end_char - start_char).collect())
+        } else {
+            // Multi-block selection: collect text from all blocks
+            let mut result = String::new();
+            for block_idx in start_block..=end_block {
+                let Some(block) = section.content.get(block_idx) else { continue };
+                let Some(text) = block_text(block) else { continue };
+
+                if block_idx == start_block {
+                    result.push_str(&text.chars().skip(start_char).collect::<String>());
+                } else if block_idx == end_block {
+                    result.push_str(&text.chars().take(end_char).collect::<String>());
+                } else {
+                    result.push_str(&text);
+                }
+                result.push('\n');
+            }
+            Some(result.trim().to_string())
+        }
+    }
+
+    /// Ask Claude about selected text
+    fn ask_about_selection(&mut self, question: &str) {
+        // Check if already streaming
+        if self.state.claude.streaming {
+            self.state.command_line.set_error("Already waiting for Claude response");
+            return;
+        }
+
+        // Check for API key
+        if self.state.claude.needs_setup {
+            self.state.command_line.set_error("API key not set. Use :claude-key <key>");
+            return;
+        }
+
+        // Get selected text
+        let selected_text = match self.get_selected_text() {
+            Some(text) if !text.is_empty() => text,
+            _ => {
+                self.state
+                    .command_line
+                    .set_error("No text selected. Use 'v' to enter visual mode and select text.");
+                return;
+            }
+        };
+
+        // Get API key
+        let api_key = match crate::claude::ApiKeyManager::get_api_key() {
+            Ok(key) => key,
+            Err(e) => {
+                self.state.command_line.set_error(format!("Failed to get API key: {}", e));
+                return;
+            }
+        };
+
+        // Truncate selection if too long
+        let selection = if selected_text.len() > 4000 {
+            format!("{}...\n\n[Selection truncated]", &selected_text[..4000])
+        } else {
+            selected_text.clone()
+        };
+
+        // Build the prompt
+        let prompt = format!(
+            "Here is a passage from a book:\n\n\"\"\"\n{}\n\"\"\"\n\n{}\n\nProvide a clear, concise answer.",
+            selection, question
+        );
+
+        // Exit visual mode
+        self.state.visual_mode.exit();
+
+        // Clear previous response and set streaming state
+        self.state.claude.clear_streaming();
+        self.state.claude.streaming = true;
+        self.state
+            .command_line
+            .set_message(format!("Asking about selection ({} chars)...", selected_text.len()));
+
+        // Create the client and message
+        let client = crate::claude::ClaudeClient::new(api_key);
+        let messages = vec![crate::claude::Message::user(&prompt)];
+        let request = crate::claude::CreateMessageRequest::new(self.state.claude.model, messages)
+            .with_system("You are an expert tutor helping someone understand content from a book. Answer questions about the selected passage clearly and concisely.");
 
         // Create channel and cancellation token
         let (tx, rx) = tokio::sync::mpsc::channel(100);

@@ -35,6 +35,8 @@ pub enum Command {
     Ask(String),
     /// Ask Claude to explain the current section: :explain [topic]
     Explain(Option<String>),
+    /// Ask Claude about selected text: :sel <question>
+    AskSelection(String),
 }
 
 /// Result of parsing a command
@@ -119,6 +121,14 @@ pub fn parse_command(input: &str) -> ParseResult {
         "explain" | "ex" => {
             let topic = if args.is_empty() { None } else { Some(args.to_string()) };
             ParseResult::Ok(Command::Explain(topic))
+        }
+        "sel" | "selection" => {
+            if args.is_empty() {
+                // Default to "explain this"
+                ParseResult::Ok(Command::AskSelection("Explain this passage".to_string()))
+            } else {
+                ParseResult::Ok(Command::AskSelection(args.to_string()))
+            }
         }
         _ => ParseResult::UnknownCommand(cmd.to_string()),
     }
