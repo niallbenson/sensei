@@ -73,19 +73,22 @@ pub fn draw(frame: &mut Frame, state: &mut AppState, theme: &Theme, progress: &P
 fn create_layout(area: Rect, state: &AppState) -> Vec<Rect> {
     let mut constraints = Vec::new();
 
-    // Curriculum panel (left): 20% width, min 20 cols
+    // Curriculum panel (left): configurable width, min 20 cols
     if state.panel_visibility.curriculum {
-        let curriculum_width = (area.width / 5).max(CURRICULUM_MIN_WIDTH);
-        constraints.push(Constraint::Length(curriculum_width));
+        let curriculum_width = (area.width as u32
+            * state.panel_visibility.curriculum_width_percent as u32
+            / 100) as u16;
+        constraints.push(Constraint::Length(curriculum_width.max(CURRICULUM_MIN_WIDTH)));
     }
 
     // Content panel (center): flexible
     constraints.push(Constraint::Min(30));
 
-    // Notes panel (right): 25% width
+    // Notes panel (right): configurable width
     if state.panel_visibility.notes {
-        let notes_width = area.width / 4;
-        constraints.push(Constraint::Length(notes_width));
+        let notes_width =
+            (area.width as u32 * state.panel_visibility.notes_width_percent as u32 / 100) as u16;
+        constraints.push(Constraint::Length(notes_width.max(CURRICULUM_MIN_WIDTH)));
     }
 
     Layout::default().direction(Direction::Horizontal).constraints(constraints).split(area).to_vec()
@@ -149,7 +152,11 @@ mod tests {
     fn layout_with_all_panels() {
         let area = Rect::new(0, 0, 120, 40);
         let state = AppState {
-            panel_visibility: PanelVisibility { curriculum: true, notes: true },
+            panel_visibility: PanelVisibility {
+                curriculum: true,
+                notes: true,
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -161,7 +168,11 @@ mod tests {
     fn layout_with_curriculum_only() {
         let area = Rect::new(0, 0, 100, 40);
         let state = AppState {
-            panel_visibility: PanelVisibility { curriculum: true, notes: false },
+            panel_visibility: PanelVisibility {
+                curriculum: true,
+                notes: false,
+                ..Default::default()
+            },
             ..Default::default()
         };
 
@@ -173,7 +184,11 @@ mod tests {
     fn layout_with_content_only() {
         let area = Rect::new(0, 0, 80, 40);
         let state = AppState {
-            panel_visibility: PanelVisibility { curriculum: false, notes: false },
+            panel_visibility: PanelVisibility {
+                curriculum: false,
+                notes: false,
+                ..Default::default()
+            },
             ..Default::default()
         };
 

@@ -9,6 +9,7 @@ pub mod config;
 pub mod export;
 pub mod learning;
 pub mod notes;
+pub mod syntax;
 pub mod theme;
 pub mod ui;
 

@@ -10,6 +10,7 @@ use ratatui::{
 
 use crate::app::state::AppState;
 use crate::book::ContentBlock;
+use crate::syntax;
 use crate::theme::Theme;
 
 /// Draw the content panel with section content
@@ -198,13 +199,13 @@ pub fn render_content_blocks(
                 render_code_block(&mut lines, code, theme);
             }
             ContentBlock::UnorderedList(items) => {
-                render_unordered_list(&mut lines, items, theme);
+                render_unordered_list(&mut lines, items, theme, width);
             }
             ContentBlock::OrderedList(items) => {
-                render_ordered_list(&mut lines, items, theme);
+                render_ordered_list(&mut lines, items, theme, width);
             }
             ContentBlock::Blockquote(text) => {
-                render_blockquote(&mut lines, text, theme);
+                render_blockquote(&mut lines, text, theme, width);
             }
             ContentBlock::HorizontalRule => {
                 render_horizontal_rule(&mut lines, theme, width);
@@ -484,13 +485,12 @@ fn render_code_block(lines: &mut Vec<Line<'static>>, code: &crate::book::CodeBlo
         Span::styled(" ─".to_string(), Style::default().fg(theme.border)),
     ]));
 
-    // Code content with basic syntax highlighting
+    // Code content with syntax highlighting
     for line in code.code.lines() {
-        let styled_line = highlight_code_line(line, code.language.as_deref(), theme);
-        lines.push(Line::from(vec![
-            Span::styled("│ ", Style::default().fg(theme.border)),
-            Span::styled(styled_line, Style::default().bg(theme.bg_secondary)),
-        ]));
+        let mut line_spans = vec![Span::styled("│ ", Style::default().fg(theme.border))];
+        let highlighted_spans = syntax::highlight_line(line, code.language.as_deref(), theme);
+        line_spans.extend(highlighted_spans);
+        lines.push(Line::from(line_spans));
     }
 
     // Bottom border
@@ -498,41 +498,87 @@ fn render_code_block(lines: &mut Vec<Line<'static>>, code: &crate::book::CodeBlo
     lines.push(Line::from(""));
 }
 
-/// Basic syntax highlighting for a code line
+/// Basic syntax highlighting for a code line (kept for backward compatibility in tests)
+#[allow(dead_code)]
 fn highlight_code_line(line: &str, language: Option<&str>, theme: &Theme) -> String {
-    // For now, just return the line as-is
-    // Future: integrate with syntect for proper highlighting
-    let _ = (language, theme); // suppress unused warnings
+    // This is now just a stub for tests - actual highlighting is done by syntax module
+    let _ = (language, theme);
     line.to_string()
 }
 
-fn render_unordered_list(lines: &mut Vec<Line<'static>>, items: &[String], theme: &Theme) {
+fn render_unordered_list(
+    lines: &mut Vec<Line<'static>>,
+    items: &[String],
+    theme: &Theme,
+    width: usize,
+) {
+    let bullet = "  • ";
+    let indent = "    "; // Same width as bullet for continuation lines
+    let content_width = width.saturating_sub(4); // Account for bullet/indent
+
     for item in items {
-        let mut spans = vec![Span::styled("  • ", Style::default().fg(theme.accent_secondary))];
-        spans.extend(parse_inline_formatting(item, theme));
-        lines.push(Line::from(spans));
+        let spans = parse_inline_formatting(item, theme);
+        let wrapped = wrap_spans(spans, content_width);
+
+        for (i, line) in wrapped.into_iter().enumerate() {
+            let prefix = if i == 0 {
+                Span::styled(bullet, Style::default().fg(theme.accent_secondary))
+            } else {
+                Span::raw(indent)
+            };
+            let mut line_spans = vec![prefix];
+            line_spans.extend(line.spans);
+            lines.push(Line::from(line_spans));
+        }
     }
     lines.push(Line::from(""));
 }
 
-fn render_ordered_list(lines: &mut Vec<Line<'static>>, items: &[String], theme: &Theme) {
+fn render_ordered_list(
+    lines: &mut Vec<Line<'static>>,
+    items: &[String],
+    theme: &Theme,
+    width: usize,
+) {
+    let content_width = width.saturating_sub(6); // Account for "  X. " prefix
+
     for (i, item) in items.iter().enumerate() {
-        let mut spans = vec![Span::styled(
-            format!("  {}. ", i + 1),
-            Style::default().fg(theme.accent_secondary),
-        )];
-        spans.extend(parse_inline_formatting(item, theme));
-        lines.push(Line::from(spans));
+        let prefix = format!("  {}. ", i + 1);
+        let indent = "     "; // Same width for continuation lines
+        let spans = parse_inline_formatting(item, theme);
+        let wrapped = wrap_spans(spans, content_width);
+
+        for (j, line) in wrapped.into_iter().enumerate() {
+            let prefix_span = if j == 0 {
+                Span::styled(prefix.clone(), Style::default().fg(theme.accent_secondary))
+            } else {
+                Span::raw(indent)
+            };
+            let mut line_spans = vec![prefix_span];
+            line_spans.extend(line.spans);
+            lines.push(Line::from(line_spans));
+        }
     }
     lines.push(Line::from(""));
 }
 
-fn render_blockquote(lines: &mut Vec<Line<'static>>, text: &str, theme: &Theme) {
-    let mut spans = vec![Span::styled("  │ ", Style::default().fg(theme.accent_primary))];
-    for span in parse_inline_formatting(text, theme) {
-        spans.push(Span::styled(span.content.to_string(), span.style.fg(theme.fg_muted)));
+fn render_blockquote(lines: &mut Vec<Line<'static>>, text: &str, theme: &Theme, width: usize) {
+    let prefix = "  │ ";
+    let content_width = width.saturating_sub(4); // Account for prefix
+
+    let spans = parse_inline_formatting(text, theme);
+    // Apply muted style to all spans
+    let muted_spans: Vec<Span<'static>> = spans
+        .into_iter()
+        .map(|s| Span::styled(s.content.to_string(), s.style.fg(theme.fg_muted)))
+        .collect();
+    let wrapped = wrap_spans(muted_spans, content_width);
+
+    for line in wrapped {
+        let mut line_spans = vec![Span::styled(prefix, Style::default().fg(theme.accent_primary))];
+        line_spans.extend(line.spans);
+        lines.push(Line::from(line_spans));
     }
-    lines.push(Line::from(spans));
     lines.push(Line::from(""));
 }
 

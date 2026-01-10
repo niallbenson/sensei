@@ -7,6 +7,8 @@ use std::path::PathBuf;
 pub enum Command {
     /// Add a book from path: :add /path/to/book
     Add(PathBuf),
+    /// Remove a book: :remove <book-id>
+    Remove(String),
     /// Open/switch to a book: :open <book-id>
     Open(String),
     /// List available books: :list
@@ -53,6 +55,13 @@ pub fn parse_command(input: &str) -> ParseResult {
                 ParseResult::MissingArgument("add".to_string())
             } else {
                 ParseResult::Ok(Command::Add(PathBuf::from(args)))
+            }
+        }
+        "remove" | "rm" | "delete" => {
+            if args.is_empty() {
+                ParseResult::MissingArgument("remove".to_string())
+            } else {
+                ParseResult::Ok(Command::Remove(args.to_string()))
             }
         }
         "open" | "o" | "load" => {
@@ -129,6 +138,24 @@ mod tests {
             }
             _ => panic!("Expected Open command"),
         }
+    }
+
+    #[test]
+    fn parse_remove_command() {
+        match parse_command("remove my-book") {
+            ParseResult::Ok(Command::Remove(id)) => {
+                assert_eq!(id, "my-book");
+            }
+            _ => panic!("Expected Remove command"),
+        }
+        // Also test aliases
+        assert!(matches!(parse_command("rm my-book"), ParseResult::Ok(Command::Remove(_))));
+        assert!(matches!(parse_command("delete my-book"), ParseResult::Ok(Command::Remove(_))));
+    }
+
+    #[test]
+    fn parse_remove_missing_arg() {
+        assert!(matches!(parse_command("remove"), ParseResult::MissingArgument(_)));
     }
 
     #[test]

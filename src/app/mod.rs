@@ -15,7 +15,7 @@ use crossterm::{
 use ratatui::{Terminal, backend::CrosstermBackend};
 
 use crate::book::storage;
-use crate::config::{Config, progress::Progress};
+use crate::config::{Config, progress::Progress, session::Session};
 use crate::ui;
 use command::{Command, ParseResult, parse_command};
 use input::{Action, key_with_modifier_to_action};
@@ -32,6 +32,9 @@ pub struct App {
     /// Progress tracking data
     progress: Progress,
 
+    /// Session state (UI state persistence)
+    session: Session,
+
     /// Terminal backend
     terminal: Terminal<CrosstermBackend<Stdout>>,
 }
@@ -41,8 +44,13 @@ impl App {
     pub fn new(config: Config) -> Result<Self> {
         let terminal = Self::setup_terminal()?;
         let progress = Progress::load().unwrap_or_default();
+        let session = Session::load().unwrap_or_default();
 
-        let mut app = Self { config, state: AppState::default(), progress, terminal };
+        let mut app = Self { config, state: AppState::default(), progress, session, terminal };
+
+        // Apply saved panel widths from session
+        app.state.panel_visibility.curriculum_width_percent = app.session.curriculum_width_percent;
+        app.state.panel_visibility.notes_width_percent = app.session.notes_width_percent;
 
         // Auto-load first book from library if available
         app.auto_load_book();
@@ -50,16 +58,34 @@ impl App {
         Ok(app)
     }
 
-    /// Auto-load the first book from the library
+    /// Auto-load book from the library (preferring last session's book)
     fn auto_load_book(&mut self) {
-        if let Ok(library) = storage::Library::load() {
-            if let Some(entry) = library.entries.first() {
-                if let Ok(book) = storage::load_book(entry) {
-                    self.state.book = Some(book);
-                    self.state.current_chapter = 0;
-                    self.state.current_section = 0;
-                }
-            }
+        let Ok(library) = storage::Library::load() else { return };
+
+        // Try to load the last opened book from session
+        let entry = if let Some(ref book_id) = self.session.current_book_id {
+            library.find_by_id(book_id).or_else(|| library.entries.first())
+        } else {
+            library.entries.first()
+        };
+
+        let Some(entry) = entry else { return };
+        let Ok(book) = storage::load_book(entry) else { return };
+
+        let book_id = book.metadata.id.clone();
+        self.state.book = Some(book);
+
+        // Apply saved session state for this book
+        if let Some(book_session) = self.session.book(&book_id) {
+            self.state.current_chapter = book_session.current_chapter;
+            self.state.current_section = book_session.current_section;
+            self.state.content.scroll_offset = book_session.content_scroll_offset;
+            self.state.curriculum.selected_index = book_session.selected_index;
+            self.state.curriculum.scroll_offset = book_session.curriculum_scroll_offset;
+            self.state.curriculum.expanded_chapters = book_session.expanded_chapters.clone();
+        } else {
+            self.state.current_chapter = 0;
+            self.state.current_section = 0;
         }
     }
 
@@ -79,6 +105,30 @@ impl App {
         execute!(self.terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
         self.terminal.show_cursor()?;
         Ok(())
+    }
+
+    /// Save current UI state to session
+    fn save_session(&mut self) {
+        // Save panel widths (always, not book-specific)
+        self.session.curriculum_width_percent =
+            self.state.panel_visibility.curriculum_width_percent;
+        self.session.notes_width_percent = self.state.panel_visibility.notes_width_percent;
+
+        // Save book-specific state if a book is loaded
+        if let Some(book) = &self.state.book {
+            let book_id = book.metadata.id.clone();
+            self.session.current_book_id = Some(book_id.clone());
+
+            let book_session = self.session.book_mut(&book_id);
+            book_session.current_chapter = self.state.current_chapter;
+            book_session.current_section = self.state.current_section;
+            book_session.content_scroll_offset = self.state.content.scroll_offset;
+            book_session.selected_index = self.state.curriculum.selected_index;
+            book_session.curriculum_scroll_offset = self.state.curriculum.scroll_offset;
+            book_session.expanded_chapters = self.state.curriculum.expanded_chapters.clone();
+        }
+
+        let _ = self.session.save();
     }
 
     /// Run the application main loop
@@ -158,6 +208,9 @@ impl App {
             }
         }
 
+        // Save session state before exiting
+        self.save_session();
+
         self.restore_terminal()?;
         Ok(())
     }
@@ -208,6 +261,26 @@ impl App {
                     self.state.focused_panel = Panel::Content;
                 }
             }
+
+            // Panel resize (based on focused panel)
+            Action::IncreasePanelWidth => match self.state.focused_panel {
+                Panel::Curriculum => {
+                    self.state.panel_visibility.increase_curriculum_width();
+                }
+                Panel::Notes => {
+                    self.state.panel_visibility.increase_notes_width();
+                }
+                Panel::Content => {}
+            },
+            Action::DecreasePanelWidth => match self.state.focused_panel {
+                Panel::Curriculum => {
+                    self.state.panel_visibility.decrease_curriculum_width();
+                }
+                Panel::Notes => {
+                    self.state.panel_visibility.decrease_notes_width();
+                }
+                Panel::Content => {}
+            },
 
             // Panel navigation (h/l move between panels)
             Action::Left => {
@@ -572,6 +645,10 @@ impl App {
                 self.open_book(&book_id)?;
                 Ok(false)
             }
+            Command::Remove(book_id) => {
+                self.remove_book(&book_id)?;
+                Ok(false)
+            }
             Command::List => {
                 self.list_books();
                 Ok(false)
@@ -632,6 +709,56 @@ impl App {
         Ok(())
     }
 
+    /// Remove a book from the library
+    fn remove_book(&mut self, book_id: &str) -> Result<()> {
+        // Load library
+        let mut library = match storage::Library::load() {
+            Ok(lib) => lib,
+            Err(e) => {
+                self.state.command_line.set_error(format!("Failed to load library: {}", e));
+                return Ok(());
+            }
+        };
+
+        // Find the book by ID or title
+        let entry_idx = library
+            .entries
+            .iter()
+            .position(|e| e.metadata.id == book_id || e.metadata.title == book_id);
+
+        match entry_idx {
+            Some(idx) => {
+                let removed_title = library.entries[idx].metadata.title.clone();
+                let removed_id = library.entries[idx].metadata.id.clone();
+
+                // Remove from library
+                library.entries.remove(idx);
+                if let Err(e) = library.save() {
+                    self.state.command_line.set_error(format!("Failed to save library: {}", e));
+                    return Ok(());
+                }
+
+                // If we removed the currently loaded book, clear it
+                if let Some(book) = &self.state.book {
+                    if book.metadata.id == removed_id {
+                        self.state.book = None;
+                        self.state.current_chapter = 0;
+                        self.state.current_section = 0;
+                        self.state.curriculum.selected_index = 0;
+                        self.state.curriculum.expanded_chapters.clear();
+                        self.state.content.scroll_offset = 0;
+                    }
+                }
+
+                self.state.command_line.set_message(format!("Removed: {}", removed_title));
+            }
+            None => {
+                self.state.command_line.set_error(format!("Book not found: {}", book_id));
+            }
+        }
+        Ok(())
+    }
+
     /// Open a book by ID
     fn open_book(&mut self, book_id: &str) -> Result<()> {
         // Load library and find the entry
@@ -650,12 +777,25 @@ impl App {
             Some(entry) => match storage::load_book(entry) {
                 Ok(book) => {
                     let title = book.metadata.title.clone();
+                    let loaded_book_id = book.metadata.id.clone();
                     self.state.book = Some(book);
-                    self.state.current_chapter = 0;
-                    self.state.current_section = 0;
-                    self.state.curriculum.selected_index = 0;
-                    self.state.curriculum.expanded_chapters.clear();
-                    self.state.content.scroll_offset = 0;
+
+                    // Apply saved session state if available
+                    if let Some(book_session) = self.session.book(&loaded_book_id) {
+                        self.state.current_chapter = book_session.current_chapter;
+                        self.state.current_section = book_session.current_section;
+                        self.state.content.scroll_offset = book_session.content_scroll_offset;
+                        self.state.curriculum.selected_index = book_session.selected_index;
+                        self.state.curriculum.scroll_offset = book_session.curriculum_scroll_offset;
+                        self.state.curriculum.expanded_chapters =
+                            book_session.expanded_chapters.clone();
+                    } else {
+                        self.state.current_chapter = 0;
+                        self.state.current_section = 0;
+                        self.state.curriculum.selected_index = 0;
+                        self.state.curriculum.expanded_chapters.clear();
+                        self.state.content.scroll_offset = 0;
+                    }
                     self.state.command_line.set_message(format!("Opened: {}", title));
                 }
                 Err(e) => {
