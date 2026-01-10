@@ -8,7 +8,9 @@ use std::io::{self, Stdout};
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -223,7 +225,8 @@ impl App {
                                     && key_event.modifiers.contains(KeyModifiers::CONTROL)))
                         {
                             // Direct line-down for cursor/visual mode
-                            if let Some(text) = self.get_block_text(self.state.content.cursor_block) {
+                            if let Some(text) = self.get_block_text(self.state.content.cursor_block)
+                            {
                                 self.state.content.cursor_line_down(&text);
                             }
                             self.ensure_cursor_visible();
@@ -411,7 +414,9 @@ impl App {
                 if self.state.visual_mode.active {
                     // Exit visual mode but keep cursor mode
                     self.state.visual_mode.exit();
-                    self.state.command_line.set_message("-- CURSOR -- (h/j/k/l to move, v to select, Esc to exit)");
+                    self.state
+                        .command_line
+                        .set_message("-- CURSOR -- (h/j/k/l to move, v to select, Esc to exit)");
                 } else {
                     // Exit cursor mode
                     self.state.content.exit_cursor_mode();
@@ -527,7 +532,9 @@ impl App {
         // Find the first text block that's visible on screen
         let first_visible = self.find_first_visible_text_block();
         self.state.content.enter_cursor_mode(first_visible);
-        self.state.command_line.set_message("-- CURSOR -- (h/j/k/l to move, v to select, Esc to exit)");
+        self.state
+            .command_line
+            .set_message("-- CURSOR -- (h/j/k/l to move, v to select, Esc to exit)");
     }
 
     /// Toggle between normal -> cursor mode -> visual mode
@@ -535,14 +542,17 @@ impl App {
         if self.state.visual_mode.active {
             // Exit visual mode back to cursor mode
             self.state.visual_mode.exit();
-            self.state.command_line.set_message("-- CURSOR -- (h/j/k/l to move, v to select, Esc to exit)");
+            self.state
+                .command_line
+                .set_message("-- CURSOR -- (h/j/k/l to move, v to select, Esc to exit)");
         } else if self.state.content.cursor_mode {
             // Already in cursor mode, start visual selection
-            self.state.visual_mode.enter(
-                self.state.content.cursor_block,
-                self.state.content.cursor_char,
-            );
-            self.state.command_line.set_message("-- VISUAL -- (move to select, a/Enter to annotate, v/Esc to cancel)");
+            self.state
+                .visual_mode
+                .enter(self.state.content.cursor_block, self.state.content.cursor_char);
+            self.state
+                .command_line
+                .set_message("-- VISUAL -- (move to select, a/Enter to annotate, v/Esc to cancel)");
         } else {
             // Enter cursor mode (navigation)
             self.enter_cursor_mode();
@@ -552,27 +562,22 @@ impl App {
     /// Update the status message based on cursor/visual mode state
     fn update_cursor_message(&mut self) {
         if self.state.visual_mode.active {
-            let (sb, sc, eb, ec) = self.state.visual_mode.selection_range(
-                self.state.content.cursor_block,
-                self.state.content.cursor_char,
-            );
+            let (sb, sc, eb, ec) = self
+                .state
+                .visual_mode
+                .selection_range(self.state.content.cursor_block, self.state.content.cursor_char);
             if sb == eb {
                 let len = ec.saturating_sub(sc);
-                self.state.command_line.set_message(format!(
-                    "-- VISUAL -- {} chars selected",
-                    len
-                ));
+                self.state.command_line.set_message(format!("-- VISUAL -- {} chars selected", len));
             } else {
-                self.state.command_line.set_message(format!(
-                    "-- VISUAL -- blocks {}-{} selected",
-                    sb, eb
-                ));
+                self.state
+                    .command_line
+                    .set_message(format!("-- VISUAL -- blocks {}-{} selected", sb, eb));
             }
         } else {
             self.state.command_line.set_message(format!(
                 "-- CURSOR -- block {}, char {}",
-                self.state.content.cursor_block,
-                self.state.content.cursor_char
+                self.state.content.cursor_block, self.state.content.cursor_char
             ));
         }
     }
@@ -605,7 +610,9 @@ impl App {
 
         // Find the first navigable block at or after this position
         let Some(book) = &self.state.book else { return 0 };
-        let Some(section) = book.get_section(self.state.current_chapter, self.state.current_section) else {
+        let Some(section) =
+            book.get_section(self.state.current_chapter, self.state.current_section)
+        else {
             return 0;
         };
 
@@ -622,21 +629,21 @@ impl App {
     /// Find the index of the first navigable block
     fn find_first_text_block_index(&self) -> usize {
         let Some(book) = &self.state.book else { return 0 };
-        let Some(section) = book.get_section(self.state.current_chapter, self.state.current_section) else {
+        let Some(section) =
+            book.get_section(self.state.current_chapter, self.state.current_section)
+        else {
             return 0;
         };
 
-        section
-            .content
-            .iter()
-            .position(Self::is_navigable_block)
-            .unwrap_or(0)
+        section.content.iter().position(Self::is_navigable_block).unwrap_or(0)
     }
 
     /// Get the total number of content blocks in current section
     fn get_block_count(&self) -> usize {
         let Some(book) = &self.state.book else { return 0 };
-        let Some(section) = book.get_section(self.state.current_chapter, self.state.current_section) else {
+        let Some(section) =
+            book.get_section(self.state.current_chapter, self.state.current_section)
+        else {
             return 0;
         };
         section.content.len()
@@ -680,15 +687,17 @@ impl App {
             self.state.visual_mode.exit();
             return;
         };
-        let Some(section) = book.get_section(self.state.current_chapter, self.state.current_section) else {
+        let Some(section) =
+            book.get_section(self.state.current_chapter, self.state.current_section)
+        else {
             self.state.visual_mode.exit();
             return;
         };
 
-        let (start_block, start_char, end_block, end_char) = self.state.visual_mode.selection_range(
-            self.state.content.cursor_block,
-            self.state.content.cursor_char,
-        );
+        let (start_block, start_char, end_block, end_char) = self
+            .state
+            .visual_mode
+            .selection_range(self.state.content.cursor_block, self.state.content.cursor_char);
 
         // For simplicity, only support single-block selection for now
         if start_block != end_block {
@@ -741,7 +750,9 @@ impl App {
 
         // Exit visual mode
         self.state.visual_mode.exit();
-        self.state.command_line.set_message(format!("Annotating: \"{}\"", truncate_str(&selected_text, 30)));
+        self.state
+            .command_line
+            .set_message(format!("Annotating: \"{}\"", truncate_str(&selected_text, 30)));
     }
 
     /// Mark current section as viewed

@@ -103,7 +103,8 @@ pub fn draw_with_progress(
                 let indent = " ".repeat(prefix.len());
                 vec![Span::styled(indent, chapter_style)]
             };
-            let (spans, new_in_code) = parse_inline_code_spans_with_state(line_text, chapter_style, code_style, in_code);
+            let (spans, new_in_code) =
+                parse_inline_code_spans_with_state(line_text, chapter_style, code_style, in_code);
             line_spans.extend(spans);
             in_code = new_in_code;
             lines.push(Line::from(line_spans));
@@ -161,7 +162,12 @@ pub fn draw_with_progress(
                         let indent = " ".repeat(section_prefix.len());
                         vec![Span::styled(indent, section_style)]
                     };
-                    let (spans, new_in_code) = parse_inline_code_spans_with_state(line_text, section_style, code_style, in_code);
+                    let (spans, new_in_code) = parse_inline_code_spans_with_state(
+                        line_text,
+                        section_style,
+                        code_style,
+                        in_code,
+                    );
                     line_spans.extend(spans);
                     in_code = new_in_code;
                     lines.push(Line::from(line_spans));
@@ -189,7 +195,8 @@ pub fn draw_with_progress(
         }
         // Scroll down if selected item is below visible area
         else if selected_line + item_height > state.curriculum.scroll_offset + visible_height {
-            state.curriculum.scroll_offset = (selected_line + item_height).saturating_sub(visible_height);
+            state.curriculum.scroll_offset =
+                (selected_line + item_height).saturating_sub(visible_height);
         }
     }
 

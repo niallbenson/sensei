@@ -84,10 +84,7 @@ impl NotesStore {
 
     /// Get note anchors for highlighting (text ranges only)
     pub fn get_note_anchors(&self, book_id: &str, section_path: &str) -> Vec<&NoteAnchor> {
-        self.get_selection_notes(book_id, section_path)
-            .into_iter()
-            .map(|n| &n.anchor)
-            .collect()
+        self.get_selection_notes(book_id, section_path).into_iter().map(|n| &n.anchor).collect()
     }
 
     /// Add a note

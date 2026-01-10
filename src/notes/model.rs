@@ -202,7 +202,14 @@ mod tests {
 
     #[test]
     fn create_selection_note() {
-        let note = Note::new_selection_note("book1", "ch01/s01", "Note about this", 2, 10, "selected text");
+        let note = Note::new_selection_note(
+            "book1",
+            "ch01/s01",
+            "Note about this",
+            2,
+            10,
+            "selected text",
+        );
         assert!(note.is_selection_note());
         assert!(!note.is_section_note());
 

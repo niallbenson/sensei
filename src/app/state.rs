@@ -739,11 +739,8 @@ impl NotesState {
 
     /// Insert a character at cursor position
     pub fn insert_char(&mut self, c: char) {
-        let byte_pos = self
-            .input
-            .char_indices()
-            .nth(self.cursor)
-            .map_or(self.input.len(), |(pos, _)| pos);
+        let byte_pos =
+            self.input.char_indices().nth(self.cursor).map_or(self.input.len(), |(pos, _)| pos);
         self.input.insert(byte_pos, c);
         self.cursor += 1;
     }
@@ -751,17 +748,10 @@ impl NotesState {
     /// Delete character before cursor
     pub fn delete_char(&mut self) {
         if self.cursor > 0 {
-            let byte_pos = self
-                .input
-                .char_indices()
-                .nth(self.cursor - 1)
-                .map(|(pos, _)| pos)
-                .unwrap_or(0);
-            let next_byte_pos = self
-                .input
-                .char_indices()
-                .nth(self.cursor)
-                .map_or(self.input.len(), |(pos, _)| pos);
+            let byte_pos =
+                self.input.char_indices().nth(self.cursor - 1).map(|(pos, _)| pos).unwrap_or(0);
+            let next_byte_pos =
+                self.input.char_indices().nth(self.cursor).map_or(self.input.len(), |(pos, _)| pos);
             self.input.replace_range(byte_pos..next_byte_pos, "");
             self.cursor -= 1;
         }
@@ -810,7 +800,11 @@ impl VisualModeState {
 
     /// Get the selection range given the current cursor position
     /// Returns (start_block, start_char, end_block, end_char) where start <= end
-    pub fn selection_range(&self, cursor_block: usize, cursor_char: usize) -> (usize, usize, usize, usize) {
+    pub fn selection_range(
+        &self,
+        cursor_block: usize,
+        cursor_char: usize,
+    ) -> (usize, usize, usize, usize) {
         // Compare positions to determine order
         if self.anchor_block < cursor_block
             || (self.anchor_block == cursor_block && self.anchor_char <= cursor_char)
@@ -1809,7 +1803,11 @@ mod tests {
         // Move to line 4 (last line) - goes to END of line for visual selection
         state.cursor_line_down(text);
         let line4_pos = state.cursor_char;
-        assert!(line4_pos > line3_pos, "Should be on line 4, but got same position {} as line 3", line4_pos);
+        assert!(
+            line4_pos > line3_pos,
+            "Should be on line 4, but got same position {} as line 3",
+            line4_pos
+        );
 
         // Verify we're at the END of the last line
         assert_eq!(line4_pos, text_len - 1, "Should be at last character of text");

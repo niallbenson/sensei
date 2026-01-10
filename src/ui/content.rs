@@ -71,11 +71,7 @@ pub fn draw_with_notes(
         .unwrap_or_default();
 
     // Get visual mode state for selection highlighting
-    let visual_mode = if state.visual_mode.active {
-        Some(&state.visual_mode)
-    } else {
-        None
-    };
+    let visual_mode = if state.visual_mode.active { Some(&state.visual_mode) } else { None };
 
     // Get cursor state for cursor rendering
     let cursor_state = if state.content.cursor_mode {
@@ -180,11 +176,7 @@ pub fn draw_with_images(
         .unwrap_or_default();
 
     // Get visual mode state for selection highlighting
-    let visual_mode = if state.visual_mode.active {
-        Some(&state.visual_mode)
-    } else {
-        None
-    };
+    let visual_mode = if state.visual_mode.active { Some(&state.visual_mode) } else { None };
 
     // Get cursor state for cursor rendering
     let cursor_state = if state.content.cursor_mode {
@@ -206,18 +198,15 @@ pub fn draw_with_images(
 
     // Collect image info for later rendering, calculating dynamic heights
     let mut image_info: Vec<ImageRenderInfo> = Vec::new();
-    let mut image_heights: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    let mut image_heights: std::collections::HashMap<usize, usize> =
+        std::collections::HashMap::new();
     for (block_idx, content_block) in section.content.iter().enumerate() {
         if let ContentBlock::Image { src, .. } = content_block {
             // Calculate dynamic height based on image aspect ratio
             let height = image_cache
                 .recommended_rows(src, content_width as u16)
                 .unwrap_or(IMAGE_RESERVED_HEIGHT);
-            image_info.push(ImageRenderInfo {
-                block_index: block_idx,
-                src: src.clone(),
-                height,
-            });
+            image_info.push(ImageRenderInfo { block_index: block_idx, src: src.clone(), height });
             image_heights.insert(block_idx, height);
         }
     }
@@ -461,7 +450,13 @@ pub fn render_content_blocks_with_visual_mode(
 ) -> Vec<Line<'static>> {
     let empty_heights = std::collections::HashMap::new();
     let (lines, _offsets) = render_content_blocks_with_offsets(
-        blocks, theme, width, note_anchors, visual_mode, cursor_state, &empty_heights,
+        blocks,
+        theme,
+        width,
+        note_anchors,
+        visual_mode,
+        cursor_state,
+        &empty_heights,
     );
     lines
 }
@@ -486,11 +481,7 @@ pub fn render_content_blocks_with_offsets(
         let block_anchors: Vec<(usize, usize)> = note_anchors
             .iter()
             .filter_map(|anchor| {
-                if anchor.block_index() == Some(block_index) {
-                    anchor.char_range()
-                } else {
-                    None
-                }
+                if anchor.block_index() == Some(block_index) { anchor.char_range() } else { None }
             })
             .collect();
 
@@ -519,11 +510,7 @@ pub fn render_content_blocks_with_offsets(
         // Check if cursor is in this block (for cursor-only mode, no selection)
         let cursor_pos = cursor_state.and_then(|cs| {
             if cs.cursor_mode && !visual_mode.is_some_and(|vm| vm.active) {
-                if block_index == cs.cursor_block {
-                    Some(cs.cursor_char)
-                } else {
-                    None
-                }
+                if block_index == cs.cursor_block { Some(cs.cursor_char) } else { None }
             } else {
                 None
             }
@@ -549,7 +536,13 @@ pub fn render_content_blocks_with_offsets(
                 } else if block_anchors.is_empty() {
                     render_paragraph(&mut lines, text, theme, width);
                 } else {
-                    render_paragraph_with_underlines(&mut lines, text, theme, width, &block_anchors);
+                    render_paragraph_with_underlines(
+                        &mut lines,
+                        text,
+                        theme,
+                        width,
+                        &block_anchors,
+                    );
                 }
             }
             ContentBlock::Code(code) => {
@@ -563,7 +556,9 @@ pub fn render_content_blocks_with_offsets(
             }
             ContentBlock::UnorderedList(items) => {
                 if let Some((start, end)) = selection_range {
-                    render_unordered_list_with_selection(&mut lines, items, theme, width, start, end);
+                    render_unordered_list_with_selection(
+                        &mut lines, items, theme, width, start, end,
+                    );
                 } else if let Some(pos) = cursor_pos {
                     render_unordered_list_with_cursor(&mut lines, items, theme, width, pos);
                 } else {
@@ -592,7 +587,8 @@ pub fn render_content_blocks_with_offsets(
                 render_horizontal_rule(&mut lines, theme, width);
             }
             ContentBlock::Image { alt, .. } => {
-                let height = image_heights.get(&block_index).copied().unwrap_or(IMAGE_RESERVED_HEIGHT);
+                let height =
+                    image_heights.get(&block_index).copied().unwrap_or(IMAGE_RESERVED_HEIGHT);
                 render_image(&mut lines, alt, theme, height);
             }
             ContentBlock::Table(table) => {
@@ -611,12 +607,12 @@ fn render_heading(lines: &mut Vec<Line<'static>>, level: u8, text: &str, theme: 
                 .fg(theme.accent_primary)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             theme.syntax_keyword,
-            "  ".to_string(),  // Left padding for consistency
+            "  ".to_string(), // Left padding for consistency
         ),
         2 => (
             Style::default().fg(theme.accent_secondary).add_modifier(Modifier::BOLD),
             theme.syntax_function,
-            "  ".to_string(),  // Left padding for consistency
+            "  ".to_string(), // Left padding for consistency
         ),
         3 => (
             Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
@@ -687,12 +683,12 @@ fn render_heading_with_selection(
                 .fg(theme.accent_primary)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             theme.syntax_keyword,
-            "  ".to_string(),  // Left padding for consistency
+            "  ".to_string(), // Left padding for consistency
         ),
         2 => (
             Style::default().fg(theme.accent_secondary).add_modifier(Modifier::BOLD),
             theme.syntax_function,
-            "  ".to_string(),  // Left padding for consistency
+            "  ".to_string(), // Left padding for consistency
         ),
         3 => (
             Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
@@ -745,12 +741,12 @@ fn render_heading_with_cursor(
                 .fg(theme.accent_primary)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             theme.syntax_keyword,
-            "  ".to_string(),  // Left padding for consistency
+            "  ".to_string(), // Left padding for consistency
         ),
         2 => (
             Style::default().fg(theme.accent_secondary).add_modifier(Modifier::BOLD),
             theme.syntax_function,
-            "  ".to_string(),  // Left padding for consistency
+            "  ".to_string(), // Left padding for consistency
         ),
         3 => (
             Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
@@ -761,9 +757,7 @@ fn render_heading_with_cursor(
     };
 
     // Cursor style - invert colors for visibility
-    let cursor_style = Style::default()
-        .fg(theme.bg_primary)
-        .bg(theme.accent_primary);
+    let cursor_style = Style::default().fg(theme.bg_primary).bg(theme.accent_primary);
 
     let mut spans: Vec<Span<'static>> = Vec::new();
     if !prefix.is_empty() {
@@ -856,11 +850,12 @@ fn render_paragraph_with_cursor(
 /// Preserves inline formatting (backticks for code, bold, italic)
 fn parse_text_with_cursor(text: &str, theme: &Theme, cursor_pos: usize) -> Vec<Span<'static>> {
     let base_style = Style::default().fg(theme.fg_primary);
-    let code_style = Style::default().fg(theme.syntax_string).bg(theme.bg_secondary).add_modifier(Modifier::BOLD);
+    let code_style = Style::default()
+        .fg(theme.syntax_string)
+        .bg(theme.bg_secondary)
+        .add_modifier(Modifier::BOLD);
     // Cursor style - highlight the character at cursor position with background color
-    let cursor_style = Style::default()
-        .fg(theme.bg_primary)
-        .bg(theme.accent_primary);
+    let cursor_style = Style::default().fg(theme.bg_primary).bg(theme.accent_primary);
 
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
@@ -893,9 +888,8 @@ fn parse_text_with_cursor(text: &str, theme: &Theme, cursor_pos: usize) -> Vec<S
         }
     }
 
-    let is_in_code = |pos: usize| -> bool {
-        code_ranges.iter().any(|(start, end)| pos >= *start && pos < *end)
-    };
+    let is_in_code =
+        |pos: usize| -> bool { code_ranges.iter().any(|(start, end)| pos >= *start && pos < *end) };
     let is_backtick = |pos: usize| -> bool {
         // Check if this position is a backtick that starts or ends a code range
         if chars[pos] != '`' {
@@ -969,7 +963,10 @@ fn parse_text_with_selection(
     end: usize,
 ) -> Vec<Span<'static>> {
     let base_style = Style::default().fg(theme.fg_primary);
-    let code_style = Style::default().fg(theme.syntax_string).bg(theme.bg_secondary).add_modifier(Modifier::BOLD);
+    let code_style = Style::default()
+        .fg(theme.syntax_string)
+        .bg(theme.bg_secondary)
+        .add_modifier(Modifier::BOLD);
     let selection_style = Style::default().fg(theme.bg_primary).bg(theme.accent_secondary);
     let code_selection_style = Style::default().fg(theme.bg_primary).bg(theme.accent_secondary);
 
@@ -1004,9 +1001,8 @@ fn parse_text_with_selection(
         }
     }
 
-    let is_in_code = |pos: usize| -> bool {
-        code_ranges.iter().any(|(s, e)| pos >= *s && pos < *e)
-    };
+    let is_in_code =
+        |pos: usize| -> bool { code_ranges.iter().any(|(s, e)| pos >= *s && pos < *e) };
     let is_backtick = |pos: usize| -> bool {
         if chars[pos] != '`' {
             return false;
@@ -1014,9 +1010,7 @@ fn parse_text_with_selection(
         code_ranges.iter().any(|(s, e)| pos == s.saturating_sub(1) || pos == *e)
     };
 
-    let is_in_selection = |pos: usize| -> bool {
-        pos >= start && pos < end
-    };
+    let is_in_selection = |pos: usize| -> bool { pos >= start && pos < end };
 
     let mut spans = Vec::new();
     let mut current = String::new();
@@ -1161,7 +1155,10 @@ fn parse_inline_formatting_with_underlines(
                         .bg(theme.bg_secondary)
                         .add_modifier(Modifier::UNDERLINED | Modifier::BOLD)
                 } else {
-                    Style::default().fg(theme.syntax_string).bg(theme.bg_secondary).add_modifier(Modifier::BOLD)
+                    Style::default()
+                        .fg(theme.syntax_string)
+                        .bg(theme.bg_secondary)
+                        .add_modifier(Modifier::BOLD)
                 };
                 spans.push(Span::styled(code, style));
                 current_underlined = is_underlined;
@@ -1255,7 +1252,10 @@ fn parse_inline_formatting(text: &str, theme: &Theme) -> Vec<Span<'static>> {
                 }
                 spans.push(Span::styled(
                     code,
-                    Style::default().fg(theme.syntax_string).bg(theme.bg_secondary).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(theme.syntax_string)
+                        .bg(theme.bg_secondary)
+                        .add_modifier(Modifier::BOLD),
                 ));
             }
             '*' | '_' => {
@@ -1416,11 +1416,7 @@ fn clean_language_label(lang: Option<&str>) -> String {
             // Also remove attributes after space
             let base_lang = base_lang.split_whitespace().next().unwrap_or(base_lang);
 
-            if base_lang.is_empty() {
-                "code".to_string()
-            } else {
-                base_lang.to_string()
-            }
+            if base_lang.is_empty() { "code".to_string() } else { base_lang.to_string() }
         }
     }
 }
@@ -1438,10 +1434,7 @@ fn render_code_block(
     let lang_label = clean_language_label(code.language.as_deref());
 
     // Calculate the max line width for consistent shading
-    let code_width = code.code.lines()
-        .map(|l| l.chars().count())
-        .max()
-        .unwrap_or(0);
+    let code_width = code.code.lines().map(|l| l.chars().count()).max().unwrap_or(0);
     let block_width = width.saturating_sub(4).max(code_width + 2);
 
     // Language label header with background - full width
@@ -1463,9 +1456,8 @@ fn render_code_block(
             .map(|span| Span::styled(span.content.to_string(), span.style.bg(theme.bg_secondary)))
             .collect();
 
-        let line_char_count: usize = highlighted_with_bg.iter()
-            .map(|s| s.content.chars().count())
-            .sum();
+        let line_char_count: usize =
+            highlighted_with_bg.iter().map(|s| s.content.chars().count()).sum();
 
         line_spans.extend(highlighted_with_bg);
 
@@ -1487,9 +1479,10 @@ fn render_code_block(
     }
 
     // Bottom border with background - full width (subtract 1 because └ takes one char)
-    lines.push(Line::from(vec![
-        Span::styled(format!("└{}", "─".repeat(block_width.saturating_sub(1))), border_style),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        format!("└{}", "─".repeat(block_width.saturating_sub(1))),
+        border_style,
+    )]));
     lines.push(Line::from(""));
 }
 
@@ -1507,10 +1500,7 @@ fn render_code_block_with_cursor(
 
     let lang_label = clean_language_label(code.language.as_deref());
 
-    let code_width = code.code.lines()
-        .map(|l| l.chars().count())
-        .max()
-        .unwrap_or(0);
+    let code_width = code.code.lines().map(|l| l.chars().count()).max().unwrap_or(0);
     let block_width = width.saturating_sub(4).max(code_width + 2);
 
     // Header - full width
@@ -1540,13 +1530,16 @@ fn render_code_block_with_cursor(
                 let before: String = chars[..local_pos].iter().collect();
                 let before_spans = syntax::highlight_line(&before, code.language.as_deref(), theme);
                 for span in before_spans {
-                    line_spans.push(Span::styled(span.content.to_string(), span.style.bg(theme.bg_secondary)));
+                    line_spans.push(Span::styled(
+                        span.content.to_string(),
+                        span.style.bg(theme.bg_secondary),
+                    ));
                 }
             }
 
             // Cursor character (or space for empty line / newline position)
             if local_pos < chars.len() {
-                let cursor_char: String = chars[local_pos..local_pos+1].iter().collect();
+                let cursor_char: String = chars[local_pos..local_pos + 1].iter().collect();
                 line_spans.push(Span::styled(cursor_char, cursor_style));
             } else {
                 // Cursor at end of line (newline position) or on empty line - show cursor as space
@@ -1555,24 +1548,29 @@ fn render_code_block_with_cursor(
 
             // After cursor
             if local_pos + 1 < chars.len() {
-                let after: String = chars[local_pos+1..].iter().collect();
+                let after: String = chars[local_pos + 1..].iter().collect();
                 let after_spans = syntax::highlight_line(&after, code.language.as_deref(), theme);
                 for span in after_spans {
-                    line_spans.push(Span::styled(span.content.to_string(), span.style.bg(theme.bg_secondary)));
+                    line_spans.push(Span::styled(
+                        span.content.to_string(),
+                        span.style.bg(theme.bg_secondary),
+                    ));
                 }
             }
         } else {
             // Normal line without cursor
             let highlighted_spans = syntax::highlight_line(line, code.language.as_deref(), theme);
             for span in highlighted_spans {
-                line_spans.push(Span::styled(span.content.to_string(), span.style.bg(theme.bg_secondary)));
+                line_spans.push(Span::styled(
+                    span.content.to_string(),
+                    span.style.bg(theme.bg_secondary),
+                ));
             }
         }
 
         // Pad to fill width
-        let line_char_count: usize = line_spans.iter().skip(1)
-            .map(|s| s.content.chars().count())
-            .sum();
+        let line_char_count: usize =
+            line_spans.iter().skip(1).map(|s| s.content.chars().count()).sum();
         let padding_needed = block_width.saturating_sub(line_char_count + 2);
         if padding_needed > 0 {
             line_spans.push(Span::styled(" ".repeat(padding_needed), bg_style));
@@ -1585,9 +1583,10 @@ fn render_code_block_with_cursor(
     }
 
     // Bottom border - full width (subtract 1 because └ takes one char)
-    lines.push(Line::from(vec![
-        Span::styled(format!("└{}", "─".repeat(block_width.saturating_sub(1))), border_style),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        format!("└{}", "─".repeat(block_width.saturating_sub(1))),
+        border_style,
+    )]));
     lines.push(Line::from(""));
 }
 
@@ -1606,10 +1605,7 @@ fn render_code_block_with_selection(
 
     let lang_label = clean_language_label(code.language.as_deref());
 
-    let code_width = code.code.lines()
-        .map(|l| l.chars().count())
-        .max()
-        .unwrap_or(0);
+    let code_width = code.code.lines().map(|l| l.chars().count()).max().unwrap_or(0);
     let block_width = width.saturating_sub(4).max(code_width + 2);
 
     // Header - full width
@@ -1647,7 +1643,10 @@ fn render_code_block_with_selection(
                 let before: String = chars[..sel_start].iter().collect();
                 let before_spans = syntax::highlight_line(&before, code.language.as_deref(), theme);
                 for span in before_spans {
-                    line_spans.push(Span::styled(span.content.to_string(), span.style.bg(theme.bg_secondary)));
+                    line_spans.push(Span::styled(
+                        span.content.to_string(),
+                        span.style.bg(theme.bg_secondary),
+                    ));
                 }
             }
 
@@ -1665,21 +1664,26 @@ fn render_code_block_with_selection(
                 let after: String = chars[sel_end..].iter().collect();
                 let after_spans = syntax::highlight_line(&after, code.language.as_deref(), theme);
                 for span in after_spans {
-                    line_spans.push(Span::styled(span.content.to_string(), span.style.bg(theme.bg_secondary)));
+                    line_spans.push(Span::styled(
+                        span.content.to_string(),
+                        span.style.bg(theme.bg_secondary),
+                    ));
                 }
             }
         } else {
             // Normal line without selection
             let highlighted_spans = syntax::highlight_line(line, code.language.as_deref(), theme);
             for span in highlighted_spans {
-                line_spans.push(Span::styled(span.content.to_string(), span.style.bg(theme.bg_secondary)));
+                line_spans.push(Span::styled(
+                    span.content.to_string(),
+                    span.style.bg(theme.bg_secondary),
+                ));
             }
         }
 
         // Pad to fill width
-        let line_char_count: usize = line_spans.iter().skip(1)
-            .map(|s| s.content.chars().count())
-            .sum();
+        let line_char_count: usize =
+            line_spans.iter().skip(1).map(|s| s.content.chars().count()).sum();
         let padding_needed = block_width.saturating_sub(line_char_count + 2);
         if padding_needed > 0 {
             line_spans.push(Span::styled(" ".repeat(padding_needed), bg_style));
@@ -1691,9 +1695,10 @@ fn render_code_block_with_selection(
     }
 
     // Bottom border - full width (subtract 1 because └ takes one char)
-    lines.push(Line::from(vec![
-        Span::styled(format!("└{}", "─".repeat(block_width.saturating_sub(1))), border_style),
-    ]));
+    lines.push(Line::from(vec![Span::styled(
+        format!("└{}", "─".repeat(block_width.saturating_sub(1))),
+        border_style,
+    )]));
     lines.push(Line::from(""));
 }
 
@@ -1845,7 +1850,12 @@ fn render_unordered_list_with_selection(
 
         let item_spans = if start < item_end && end > char_offset {
             // Selection overlaps this item
-            parse_text_with_selection(item, theme, item_start.min(item_len), item_end_sel.min(item_len))
+            parse_text_with_selection(
+                item,
+                theme,
+                item_start.min(item_len),
+                item_end_sel.min(item_len),
+            )
         } else {
             parse_inline_formatting(item, theme)
         };
@@ -1946,7 +1956,12 @@ fn render_ordered_list_with_selection(
         let item_end_sel = end.saturating_sub(char_offset);
 
         let item_spans = if start < item_end && end > char_offset {
-            parse_text_with_selection(item, theme, item_start.min(item_len), item_end_sel.min(item_len))
+            parse_text_with_selection(
+                item,
+                theme,
+                item_start.min(item_len),
+                item_end_sel.min(item_len),
+            )
         } else {
             parse_inline_formatting(item, theme)
         };
@@ -2079,9 +2094,7 @@ fn render_blockquote_with_cursor(
     let prefix = "  │ ";
     let content_width = width.saturating_sub(4);
     // Cursor style - invert colors for visibility
-    let cursor_style = Style::default()
-        .fg(theme.bg_primary)
-        .bg(theme.accent_primary);
+    let cursor_style = Style::default().fg(theme.bg_primary).bg(theme.accent_primary);
     let muted_style = Style::default().fg(theme.fg_muted);
 
     let chars: Vec<char> = text.chars().collect();

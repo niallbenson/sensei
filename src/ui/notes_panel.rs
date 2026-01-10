@@ -137,9 +137,8 @@ pub fn draw(
 
 /// Draw an empty message centered in the area
 fn draw_empty_message(frame: &mut Frame, area: Rect, theme: &Theme, msg: &str) {
-    let msg_widget = Paragraph::new(msg)
-        .style(Style::default().fg(theme.fg_muted))
-        .wrap(Wrap { trim: true });
+    let msg_widget =
+        Paragraph::new(msg).style(Style::default().fg(theme.fg_muted)).wrap(Wrap { trim: true });
     frame.render_widget(msg_widget, area);
 }
 
@@ -203,10 +202,7 @@ fn draw_note_input(
                     spans.push(Span::styled(after, Style::default().fg(theme.fg_primary)));
                 }
             } else {
-                spans.push(Span::styled(
-                    line_text.clone(),
-                    Style::default().fg(theme.fg_primary),
-                ));
+                spans.push(Span::styled(line_text.clone(), Style::default().fg(theme.fg_primary)));
             }
 
             lines.push(Line::from(spans));
@@ -314,10 +310,7 @@ fn format_timestamp(timestamp: i64) -> String {
 }
 
 /// Get the note at the current selection index
-pub fn get_selected_note<'a>(
-    state: &AppState,
-    notes_store: &'a NotesStore,
-) -> Option<&'a Note> {
+pub fn get_selected_note<'a>(state: &AppState, notes_store: &'a NotesStore) -> Option<&'a Note> {
     let book = state.book.as_ref()?;
     let chapter = book.chapters.get(state.current_chapter)?;
     let section = chapter.sections.get(state.current_section)?;

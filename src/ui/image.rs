@@ -12,11 +12,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use image::{DynamicImage, RgbaImage};
-use ratatui::layout::Rect;
 use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui_image::StatefulImage;
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::StatefulProtocol;
-use ratatui_image::StatefulImage;
 
 /// Cache for loaded and encoded images
 pub struct ImageCache {
@@ -54,12 +54,7 @@ impl ImageCache {
             picker.set_protocol_type(ProtocolType::Kitty);
         }
 
-        Self {
-            picker,
-            images: HashMap::new(),
-            protocols: HashMap::new(),
-            base_path: None,
-        }
+        Self { picker, images: HashMap::new(), protocols: HashMap::new(), base_path: None }
     }
 
     /// Create a new image cache with halfblocks only (safe fallback)
@@ -345,27 +340,22 @@ pub fn terminal_supports_graphics() -> bool {
 
 /// Detect if running in Ghostty terminal
 pub fn is_ghostty() -> bool {
-    std::env::var("TERM_PROGRAM")
-        .map(|v| v.contains("ghostty"))
-        .unwrap_or(false)
+    std::env::var("TERM_PROGRAM").map(|v| v.contains("ghostty")).unwrap_or(false)
         || std::env::var("GHOSTTY_RESOURCES_DIR").is_ok()
 }
 
 /// Load an SVG file and render it to a raster image
 fn load_svg(path: &Path) -> Result<DynamicImage, String> {
     // Read the SVG file
-    let svg_data = std::fs::read(path)
-        .map_err(|e| format!("Failed to read SVG file: {}", e))?;
+    let svg_data = std::fs::read(path).map_err(|e| format!("Failed to read SVG file: {}", e))?;
 
     // Create a font database and load system fonts for text rendering
     let mut fontdb = resvg::usvg::fontdb::Database::new();
     fontdb.load_system_fonts();
 
     // Set up options with the font database
-    let options = resvg::usvg::Options {
-        fontdb: std::sync::Arc::new(fontdb),
-        ..Default::default()
-    };
+    let options =
+        resvg::usvg::Options { fontdb: std::sync::Arc::new(fontdb), ..Default::default() };
 
     // Parse the SVG with font support
     let tree = resvg::usvg::Tree::from_data(&svg_data, &options)

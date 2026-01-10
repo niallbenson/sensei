@@ -349,7 +349,10 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
                     // Create heading from accumulated caption content
                     if !caption_content.is_empty() {
                         flush_text(&mut current_text, &mut blocks);
-                        blocks.push(ContentBlock::Heading { level: 5, text: caption_content.trim().to_string() });
+                        blocks.push(ContentBlock::Heading {
+                            level: 5,
+                            text: caption_content.trim().to_string(),
+                        });
                         caption_content.clear();
                     }
                     continue; // Skip the closing tag
@@ -1464,7 +1467,11 @@ holding the value `"hello"` bound to `s1`</span>"#;
             // Caption should be on one line with inline code preserved
             assert!(text.contains("Figure 4-1"), "Expected Figure 4-1, got: {}", text);
             assert!(text.contains("`String`"), "Expected `String` inline code, got: {}", text);
-            assert!(text.contains("`\"hello\"`"), "Expected `\"hello\"` inline code, got: {}", text);
+            assert!(
+                text.contains("`\"hello\"`"),
+                "Expected `\"hello\"` inline code, got: {}",
+                text
+            );
             assert!(text.contains("`s1`"), "Expected `s1` inline code, got: {}", text);
             // Soft breaks should be converted to spaces, not newlines
             assert!(!text.contains('\n'), "Caption should be on one line, got: {}", text);
