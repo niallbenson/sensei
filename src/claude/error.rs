@@ -42,7 +42,7 @@ pub enum ClaudeError {
     Cancelled,
 
     /// Invalid API key format
-    #[error("Invalid API key format. Key should start with 'sk-ant-'")]
+    #[error("Invalid API key format. Key must be at least 10 characters")]
     InvalidApiKey,
 
     /// JSON serialization/deserialization error

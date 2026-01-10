@@ -52,8 +52,9 @@ impl ApiKeyManager {
 
     /// Validate API key format
     fn validate_key_format(key: &str) -> bool {
-        // Anthropic API keys start with "sk-ant-"
-        key.starts_with("sk-ant-") && key.len() > 20
+        // Basic validation - must be non-empty and reasonable length
+        // Let the API do the actual validation
+        !key.trim().is_empty() && key.len() >= 10
     }
 
     /// Mask an API key for display (show first and last 4 chars)
@@ -74,8 +75,10 @@ mod tests {
     #[test]
     fn validate_key_format() {
         assert!(ApiKeyManager::validate_key_format("sk-ant-api03-abcdefghijklmnop"));
-        assert!(!ApiKeyManager::validate_key_format("invalid-key"));
-        assert!(!ApiKeyManager::validate_key_format("sk-ant-short"));
+        assert!(ApiKeyManager::validate_key_format("some-other-key-format-12345"));
+        assert!(!ApiKeyManager::validate_key_format("short"));
+        assert!(!ApiKeyManager::validate_key_format(""));
+        assert!(!ApiKeyManager::validate_key_format("   "));
     }
 
     #[test]
