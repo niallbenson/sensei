@@ -31,6 +31,8 @@ pub enum Command {
     ClaudeModel(String),
     /// Clear Claude state: :claude-clear
     ClaudeClear,
+    /// Ask Claude a question: :ask <question>
+    Ask(String),
 }
 
 /// Result of parsing a command
@@ -105,6 +107,13 @@ pub fn parse_command(input: &str) -> ParseResult {
             }
         }
         "claude-clear" | "cc" => ParseResult::Ok(Command::ClaudeClear),
+        "ask" => {
+            if args.is_empty() {
+                ParseResult::MissingArgument("ask".to_string())
+            } else {
+                ParseResult::Ok(Command::Ask(args.to_string()))
+            }
+        }
         _ => ParseResult::UnknownCommand(cmd.to_string()),
     }
 }

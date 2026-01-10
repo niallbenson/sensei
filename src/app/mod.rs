@@ -1316,7 +1316,60 @@ impl App {
                 self.state.command_line.set_message("Claude state cleared");
                 Ok(false)
             }
+            Command::Ask(question) => {
+                self.ask_claude(&question);
+                Ok(false)
+            }
         }
+    }
+
+    /// Send a question to Claude and start streaming the response
+    fn ask_claude(&mut self, question: &str) {
+        // Check if already streaming
+        if self.state.claude.streaming {
+            self.state.command_line.set_error("Already waiting for Claude response");
+            return;
+        }
+
+        // Check for API key
+        if self.state.claude.needs_setup {
+            self.state.command_line.set_error("API key not set. Use :claude-key <key>");
+            return;
+        }
+
+        // Get API key
+        let api_key = match crate::claude::ApiKeyManager::get_api_key() {
+            Ok(key) => key,
+            Err(e) => {
+                self.state.command_line.set_error(format!("Failed to get API key: {}", e));
+                return;
+            }
+        };
+
+        // Clear previous response and set streaming state
+        self.state.claude.clear_streaming();
+        self.state.claude.streaming = true;
+        self.state.command_line.set_message("Asking Claude...");
+
+        // Create the client and message
+        let client = crate::claude::ClaudeClient::new(api_key);
+        let messages = vec![crate::claude::Message::user(question)];
+        let request = crate::claude::CreateMessageRequest::new(self.state.claude.model, messages)
+            .with_system("You are a helpful assistant for a book reader application. Answer questions concisely.");
+
+        // Create channel and cancellation token
+        let (tx, rx) = tokio::sync::mpsc::channel(100);
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+
+        self.claude_rx = Some(rx);
+        self.claude_cancel = Some(cancel_token.clone());
+
+        // Spawn the streaming task
+        tokio::spawn(async move {
+            if let Err(e) = client.send_streaming(request, tx, cancel_token).await {
+                tracing::error!("Claude API error: {}", e);
+            }
+        });
     }
 
     /// Expand tilde in path to home directory
@@ -1554,9 +1607,21 @@ impl App {
             StreamEvent::MessageStop => {
                 // Response complete
                 self.state.claude.streaming = false;
-                self.state.command_line.set_message("Claude response complete");
-                // Note: The stream_buffer contains the full response
-                // It will be processed by the caller (e.g., Q&A, quiz generation)
+                // Display the response (truncated for status bar)
+                let response = &self.state.claude.stream_buffer;
+                if response.is_empty() {
+                    self.state.command_line.set_message("Claude: (no response)");
+                } else {
+                    // Truncate long responses for the status bar display
+                    let display = if response.len() > 200 {
+                        format!("Claude: {}...", &response[..200])
+                    } else {
+                        format!("Claude: {}", response)
+                    };
+                    self.state.command_line.set_message(display);
+                }
+                self.claude_rx = None;
+                self.claude_cancel = None;
             }
             StreamEvent::Error { message } => {
                 self.state.claude.set_error(&message);
