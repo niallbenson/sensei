@@ -37,6 +37,8 @@ pub fn vim_key_to_action(key: KeyCode) -> Option<Action> {
         KeyCode::Char('w') => Some(Action::WordForward),
         KeyCode::Char('b') => Some(Action::WordBackward),
         KeyCode::Char('E') => Some(Action::WordEnd),
+        // Clipboard (yank like vim)
+        KeyCode::Char('y') => Some(Action::Yank),
         _ => None,
     }
 }
@@ -104,6 +106,9 @@ pub enum Action {
     VisualMode,
     Help,
     Quit,
+
+    // Clipboard
+    Yank,
 
     // Word motions (for visual mode)
     WordForward,

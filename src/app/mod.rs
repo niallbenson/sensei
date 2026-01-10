@@ -591,6 +591,13 @@ impl App {
                 self.update_cursor_message();
             }
 
+            // Yank (copy to clipboard)
+            Action::Yank => {
+                if self.state.visual_mode.active {
+                    self.yank_selection();
+                }
+            }
+
             _ => {}
         }
         Ok(false)
@@ -1905,6 +1912,38 @@ impl App {
                 result.push('\n');
             }
             Some(result.trim().to_string())
+        }
+    }
+
+    /// Copy selected text to clipboard (yank)
+    fn yank_selection(&mut self) {
+        let Some(text) = self.get_selected_text() else {
+            self.state.command_line.set_error("No text selected");
+            return;
+        };
+
+        if text.is_empty() {
+            self.state.command_line.set_error("No text selected");
+            return;
+        }
+
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => match clipboard.set_text(&text) {
+                Ok(()) => {
+                    let char_count = text.chars().count();
+                    self.state
+                        .command_line
+                        .set_message(format!("Yanked {} characters", char_count));
+                    // Exit visual mode after yanking
+                    self.state.visual_mode.exit();
+                }
+                Err(e) => {
+                    self.state.command_line.set_error(format!("Failed to copy: {}", e));
+                }
+            },
+            Err(e) => {
+                self.state.command_line.set_error(format!("Clipboard unavailable: {}", e));
+            }
         }
     }
 
