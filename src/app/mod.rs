@@ -1892,20 +1892,26 @@ impl App {
         }
 
         // For single-block selection
+        // end_char is inclusive (the cursor position), so we need +1 to include it
         if start_block == end_block {
             let text = block_text(section.content.get(start_block)?)?;
-            Some(text.chars().skip(start_char).take(end_char - start_char).collect())
+            Some(text.chars().skip(start_char).take(end_char - start_char + 1).collect())
         } else {
             // Multi-block selection: collect text from all blocks
             let mut result = String::new();
             for block_idx in start_block..=end_block {
-                let Some(block) = section.content.get(block_idx) else { continue };
-                let Some(text) = block_text(block) else { continue };
+                let Some(block) = section.content.get(block_idx) else {
+                    continue;
+                };
+                let Some(text) = block_text(block) else {
+                    continue;
+                };
 
                 if block_idx == start_block {
                     result.push_str(&text.chars().skip(start_char).collect::<String>());
                 } else if block_idx == end_block {
-                    result.push_str(&text.chars().take(end_char).collect::<String>());
+                    // end_char is inclusive, so take end_char + 1 characters
+                    result.push_str(&text.chars().take(end_char + 1).collect::<String>());
                 } else {
                     result.push_str(&text);
                 }
