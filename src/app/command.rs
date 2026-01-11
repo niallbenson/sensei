@@ -9,6 +9,8 @@ pub enum Command {
     Add(PathBuf),
     /// Remove a book: :remove <book-id>
     Remove(String),
+    /// Refresh book cache (re-parse without losing progress): :refresh
+    Refresh,
     /// Open/switch to a book: :open <book-id>
     Open(String),
     /// List available books: :list
@@ -78,6 +80,7 @@ pub fn parse_command(input: &str) -> ParseResult {
                 ParseResult::Ok(Command::Remove(args.to_string()))
             }
         }
+        "refresh" | "reload" => ParseResult::Ok(Command::Refresh),
         "open" | "o" | "load" => {
             if args.is_empty() {
                 ParseResult::MissingArgument("open".to_string())

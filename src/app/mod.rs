@@ -1947,6 +1947,10 @@ impl App {
                 self.remove_book(&book_id)?;
                 Ok(false)
             }
+            Command::Refresh => {
+                self.refresh_current_book()?;
+                Ok(false)
+            }
             Command::List => {
                 self.list_books();
                 Ok(false)
@@ -2450,6 +2454,58 @@ impl App {
                 self.state.command_line.set_error(format!("Book not found: {}", book_id));
             }
         }
+        Ok(())
+    }
+
+    /// Refresh the currently loaded book (clear cache and reload)
+    fn refresh_current_book(&mut self) -> Result<()> {
+        let Some(book) = &self.state.book else {
+            self.state.command_line.set_error("No book currently loaded");
+            return Ok(());
+        };
+
+        let book_id = book.metadata.id.clone();
+        let book_title = book.metadata.title.clone();
+
+        // Clear the cache
+        match storage::refresh_book(&book_id) {
+            Ok(true) => {
+                // Reload the book
+                let library = storage::Library::load()?;
+                if let Some(entry) = library.find_by_id(&book_id) {
+                    match storage::load_book(entry) {
+                        Ok(reloaded_book) => {
+                            // Preserve current position
+                            let chapter = self.state.current_chapter;
+                            let section = self.state.current_section;
+                            let scroll = self.state.content.scroll_offset;
+
+                            self.state.book = Some(reloaded_book);
+
+                            // Restore position (clamped to valid range)
+                            self.state.current_chapter = chapter;
+                            self.state.current_section = section;
+                            self.state.content.scroll_offset = scroll;
+
+                            self.state.command_line.set_message(format!(
+                                "Refreshed: {} (progress preserved)",
+                                book_title
+                            ));
+                        }
+                        Err(e) => {
+                            self.state.command_line.set_error(format!("Failed to reload: {}", e));
+                        }
+                    }
+                }
+            }
+            Ok(false) => {
+                self.state.command_line.set_error("Book not found in library");
+            }
+            Err(e) => {
+                self.state.command_line.set_error(format!("Failed to refresh: {}", e));
+            }
+        }
+
         Ok(())
     }
 
