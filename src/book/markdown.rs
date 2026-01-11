@@ -54,6 +54,8 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
     let mut in_html_comment = false;
     let mut in_caption = false; // Track when inside <span class="caption">
     let mut caption_content = String::new(); // Accumulate caption text
+    let mut in_superscript = false; // Track when inside <sup>
+    let mut superscript_content = String::new(); // Accumulate superscript text
 
     for event in parser {
         match event {
@@ -248,6 +250,9 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
             Event::Text(text) => {
                 if in_code_block {
                     code_content.push_str(&text);
+                } else if in_superscript {
+                    // Accumulate superscript text (will be converted when </sup> is encountered)
+                    superscript_content.push_str(&text);
                 } else if in_table {
                     current_cell.push_str(&text);
                 } else if in_list {
@@ -360,6 +365,30 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
                     continue; // Skip the closing tag
                 }
 
+                // Handle superscript tags - convert to Unicode superscripts
+                if html_str.contains("<sup>") {
+                    in_superscript = true;
+                    superscript_content.clear();
+                    continue;
+                }
+                if in_superscript && html_str.contains("</sup>") {
+                    in_superscript = false;
+                    let converted = convert_to_superscript(&superscript_content);
+                    if in_table {
+                        current_cell.push_str(&converted);
+                    } else if in_list {
+                        current_list_item.push_str(&converted);
+                    } else if in_blockquote {
+                        blockquote_content.push_str(&converted);
+                    } else if in_caption {
+                        caption_content.push_str(&converted);
+                    } else {
+                        current_text.push_str(&converted);
+                    }
+                    superscript_content.clear();
+                    continue;
+                }
+
                 // Extract any visible text from HTML, skip tags
                 let text = html_str
                     .replace("&vert;", "|")
@@ -459,6 +488,33 @@ fn heading_level_to_u8(level: HeadingLevel) -> u8 {
         HeadingLevel::H5 => 5,
         HeadingLevel::H6 => 6,
     }
+}
+
+/// Convert text to Unicode superscript characters where possible
+fn convert_to_superscript(text: &str) -> String {
+    text.chars()
+        .map(|c| match c {
+            '0' => '⁰',
+            '1' => '¹',
+            '2' => '²',
+            '3' => '³',
+            '4' => '⁴',
+            '5' => '⁵',
+            '6' => '⁶',
+            '7' => '⁷',
+            '8' => '⁸',
+            '9' => '⁹',
+            '+' => '⁺',
+            '-' => '⁻',
+            '=' => '⁼',
+            '(' => '⁽',
+            ')' => '⁾',
+            'n' => 'ⁿ',
+            'i' => 'ⁱ',
+            ' ' => ' ', // Keep spaces as-is
+            _ => c,     // Keep other characters as-is (no superscript available)
+        })
+        .collect()
 }
 
 fn convert_alignment(align: pulldown_cmark::Alignment) -> Alignment {
@@ -1497,6 +1553,54 @@ holding the value `"hello"` bound to `s1`</span>"#;
             assert!(!text.contains('\n'), "Caption should be on one line, got: {}", text);
         } else {
             panic!("Expected heading, got {:?}", blocks[0]);
+        }
+    }
+
+    #[test]
+    fn convert_superscript_numbers() {
+        let result = super::convert_to_superscript("0123456789");
+        assert_eq!(result, "⁰¹²³⁴⁵⁶⁷⁸⁹");
+    }
+
+    #[test]
+    fn convert_superscript_letters() {
+        let result = super::convert_to_superscript("n-1");
+        assert_eq!(result, "ⁿ⁻¹");
+    }
+
+    #[test]
+    fn convert_superscript_with_parens() {
+        let result = super::convert_to_superscript("(n-1)");
+        assert_eq!(result, "⁽ⁿ⁻¹⁾");
+    }
+
+    #[test]
+    fn parse_html_superscript() {
+        let md = "2<sup>n</sup> values";
+        let blocks = parse_markdown_content(md);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::Paragraph(text) = &blocks[0] {
+            assert!(text.contains("2ⁿ"), "Expected Unicode superscript, got: {}", text);
+        } else {
+            panic!("Expected paragraph, got {:?}", blocks[0]);
+        }
+    }
+
+    #[test]
+    fn parse_html_superscript_complex() {
+        // Like in the Rust book: 2^(n-1) to 2^(n-1) - 1
+        let md = "from -(2<sup>n - 1</sup>) to 2<sup>n - 1</sup> - 1 inclusive";
+        let blocks = parse_markdown_content(md);
+        assert_eq!(blocks.len(), 1);
+        if let ContentBlock::Paragraph(text) = &blocks[0] {
+            // Should have Unicode superscripts for the exponents
+            assert!(
+                text.contains("2ⁿ ⁻ ¹") || text.contains("2ⁿ⁻¹"),
+                "Expected Unicode superscript exponent, got: {}",
+                text
+            );
+        } else {
+            panic!("Expected paragraph, got {:?}", blocks[0]);
         }
     }
 }
