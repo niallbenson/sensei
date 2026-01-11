@@ -122,6 +122,10 @@ pub struct ContentState {
     pub cursor_blink_frame: usize,
     /// Starting line number for each content block (computed during render)
     pub block_line_offsets: Vec<usize>,
+    /// Content width in characters (computed during render)
+    pub content_width: usize,
+    /// Content panel inner area (x, y, width, height) for mouse hit detection
+    pub content_area: (u16, u16, u16, u16),
     /// Whether the section footer buttons are focused
     pub footer_focused: bool,
     /// Which footer button is selected (0 = Quiz, 1 = Next)

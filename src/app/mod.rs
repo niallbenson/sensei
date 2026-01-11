@@ -10,6 +10,7 @@ use anyhow::Result;
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+        MouseButton, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -56,6 +57,9 @@ pub struct App {
 
     /// Channel receiver for quiz generation results
     quiz_rx: Option<tokio::sync::mpsc::Receiver<QuizGenerationResult>>,
+
+    /// Mouse selection state: (is_dragging, start_block, start_char)
+    mouse_selection: Option<(usize, usize)>,
 }
 
 /// Result from quiz generation task
@@ -86,6 +90,7 @@ impl App {
             claude_rx: None,
             claude_cancel: None,
             quiz_rx: None,
+            mouse_selection: None,
         };
 
         // Apply saved panel widths from session
@@ -234,7 +239,15 @@ impl App {
             // Handle all pending events before next redraw (makes scrolling feel faster)
             let mut should_quit = false;
             while event::poll(std::time::Duration::from_millis(0))? {
-                if let Event::Key(key_event) = event::read()? {
+                let event = event::read()?;
+
+                // Handle mouse events for text selection
+                if let Event::Mouse(mouse_event) = event {
+                    self.handle_mouse_event(mouse_event);
+                    continue;
+                }
+
+                if let Event::Key(key_event) = event {
                     if key_event.kind == KeyEventKind::Press {
                         // Ctrl+C to cancel Claude streaming
                         if key_event.code == KeyCode::Char('c')
@@ -589,6 +602,13 @@ impl App {
                 }
                 self.ensure_cursor_visible();
                 self.update_cursor_message();
+            }
+
+            // Yank (copy to clipboard)
+            Action::Yank => {
+                if self.state.visual_mode.active {
+                    self.yank_selection();
+                }
             }
 
             _ => {}
@@ -1327,6 +1347,289 @@ impl App {
         }
     }
 
+    /// Handle mouse events for text selection
+    fn handle_mouse_event(&mut self, mouse_event: crossterm::event::MouseEvent) {
+        // Only handle mouse events on the main screen in content panel
+        if !matches!(self.state.screen, Screen::Main) {
+            return;
+        }
+
+        // Use the stored content area from rendering (much more accurate than calculating)
+        let (content_x, content_y, content_w, content_h) = self.state.content.content_area;
+
+        // If content area hasn't been set yet, skip
+        if content_w == 0 || content_h == 0 {
+            return;
+        }
+
+        let col = mouse_event.column;
+        let row = mouse_event.row;
+
+        // Check if mouse is within content panel bounds
+        if col < content_x
+            || col >= content_x + content_w
+            || row < content_y
+            || row >= content_y + content_h
+        {
+            return;
+        }
+
+        // Calculate position relative to content area
+        let rel_col = col - content_x;
+        let rel_row = row - content_y;
+
+        match mouse_event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Start selection - convert screen position to block/char
+                if let Some((block, char_pos)) = self.screen_to_text_position(rel_col, rel_row) {
+                    // Enter cursor mode and start visual selection
+                    self.state.content.cursor_block = block;
+                    self.state.content.cursor_char = char_pos;
+                    self.state.content.cursor_mode = true;
+
+                    // Start visual mode with anchor at this position
+                    self.state.visual_mode.active = true;
+                    self.state.visual_mode.anchor_block = block;
+                    self.state.visual_mode.anchor_char = char_pos;
+
+                    // Track mouse selection start
+                    self.mouse_selection = Some((block, char_pos));
+
+                    self.state.focused_panel = Panel::Content;
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                // Continue selection if we started one
+                if self.mouse_selection.is_some() {
+                    if let Some((block, char_pos)) = self.screen_to_text_position(rel_col, rel_row)
+                    {
+                        // Update cursor position (selection end)
+                        self.state.content.cursor_block = block;
+                        self.state.content.cursor_char = char_pos;
+                    }
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                // End selection
+                if self.mouse_selection.is_some() {
+                    if let Some((block, char_pos)) = self.screen_to_text_position(rel_col, rel_row)
+                    {
+                        self.state.content.cursor_block = block;
+                        self.state.content.cursor_char = char_pos;
+                    }
+
+                    // Check if it was just a click (no drag) - clear selection
+                    if let Some((start_block, start_char)) = self.mouse_selection {
+                        if start_block == self.state.content.cursor_block
+                            && start_char == self.state.content.cursor_char
+                        {
+                            // Just a click, exit visual mode but keep cursor
+                            self.state.visual_mode.exit();
+                        }
+                    }
+
+                    self.mouse_selection = None;
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                // Scroll content up
+                self.state.content.scroll_offset =
+                    self.state.content.scroll_offset.saturating_sub(3);
+            }
+            MouseEventKind::ScrollDown => {
+                // Scroll content down
+                self.state.content.scroll_offset += 3;
+                self.state.content.clamp_scroll();
+            }
+            _ => {}
+        }
+    }
+
+    /// Convert screen coordinates (relative to content panel) to block index and character position
+    fn screen_to_text_position(&self, col: u16, row: u16) -> Option<(usize, usize)> {
+        use crate::book::ContentBlock;
+
+        let book = self.state.book.as_ref()?;
+        let section = book.get_section(self.state.current_chapter, self.state.current_section)?;
+
+        // Calculate which line we're on (accounting for scroll)
+        let target_line = self.state.content.scroll_offset + row as usize;
+
+        // Find which block this line belongs to using block_line_offsets
+        let offsets = &self.state.content.block_line_offsets;
+
+        let mut block_idx = 0;
+        for (idx, &offset) in offsets.iter().enumerate() {
+            if offset <= target_line {
+                block_idx = idx;
+            } else {
+                break;
+            }
+        }
+
+        // Get the block and calculate character position
+        let block = section.content.get(block_idx)?;
+        let block_start_line = offsets.get(block_idx).copied().unwrap_or(0);
+        let line_within_block = target_line.saturating_sub(block_start_line);
+        let content_width = self.state.content.content_width;
+        let col = col as usize;
+
+        let char_pos = match block {
+            ContentBlock::Paragraph(text) => {
+                // Paragraphs: 2 spaces padding, wrapped at content_width - 4
+                let padding = 2;
+                let wrap_width = content_width.saturating_sub(4).max(1);
+                let col_in_text = col.saturating_sub(padding);
+
+                // Calculate character position by simulating word wrap
+                self.calculate_wrapped_char_pos(text, wrap_width, line_within_block, col_in_text)
+            }
+            ContentBlock::Heading { text, level } => {
+                // Headings: variable padding based on level, single line (usually)
+                let padding = match level {
+                    1..=3 => 2,
+                    4 => 4,
+                    _ => 6,
+                };
+                let col_in_text = col.saturating_sub(padding);
+                col_in_text.min(text.chars().count().saturating_sub(1))
+            }
+            ContentBlock::Code(code) => {
+                // Code blocks: "│  N│ " prefix (about 6 chars), then code
+                // First line is header "┌─ rust ─────", skip it
+                if line_within_block == 0 {
+                    return Some((block_idx, 0));
+                }
+
+                let code_lines: Vec<&str> = code.code.lines().collect();
+                let line_in_code = line_within_block.saturating_sub(1); // Account for header
+
+                if line_in_code >= code_lines.len() {
+                    // On closing line or beyond
+                    return Some((block_idx, code.code.chars().count().saturating_sub(1)));
+                }
+
+                // Calculate character position in the code
+                // Prefix is "│  N│ " where N is line number
+                let prefix_width = 6; // Approximate
+                let col_in_code = col.saturating_sub(prefix_width);
+
+                // Sum characters from previous lines + column in current line
+                let chars_before: usize = code_lines
+                    .iter()
+                    .take(line_in_code)
+                    .map(|l| l.chars().count() + 1) // +1 for newline
+                    .sum();
+                let current_line_len =
+                    code_lines.get(line_in_code).map(|l| l.chars().count()).unwrap_or(0);
+                let col_in_line = col_in_code.min(current_line_len);
+
+                chars_before + col_in_line
+            }
+            ContentBlock::Blockquote(text) => {
+                // Blockquotes: "│ " prefix (2 chars), wrapped at content_width - 4
+                let padding = 4; // "│ " + extra padding
+                let wrap_width = content_width.saturating_sub(4).max(1);
+                let col_in_text = col.saturating_sub(padding);
+
+                self.calculate_wrapped_char_pos(text, wrap_width, line_within_block, col_in_text)
+            }
+            ContentBlock::UnorderedList(items) => {
+                // Lists: "  • " prefix (4 chars), items may wrap
+                let padding = 4;
+                let wrap_width = content_width.saturating_sub(4).max(1);
+                let col_in_text = col.saturating_sub(padding);
+                let full_text = items.join("\n");
+
+                self.calculate_wrapped_char_pos(
+                    &full_text,
+                    wrap_width,
+                    line_within_block,
+                    col_in_text,
+                )
+            }
+            ContentBlock::OrderedList(items) => {
+                // Ordered lists: "  N. " prefix (about 5-6 chars)
+                let padding = 6;
+                let wrap_width = content_width.saturating_sub(6).max(1);
+                let col_in_text = col.saturating_sub(padding);
+                let full_text = items.join("\n");
+
+                self.calculate_wrapped_char_pos(
+                    &full_text,
+                    wrap_width,
+                    line_within_block,
+                    col_in_text,
+                )
+            }
+            _ => 0, // Images, tables, horizontal rules - just position at start
+        };
+
+        Some((block_idx, char_pos))
+    }
+
+    /// Calculate character position in wrapped text given the wrap width and screen position
+    fn calculate_wrapped_char_pos(
+        &self,
+        text: &str,
+        wrap_width: usize,
+        line_within_block: usize,
+        col_in_text: usize,
+    ) -> usize {
+        if wrap_width == 0 || text.is_empty() {
+            return 0;
+        }
+
+        // Build wrapped lines to find exact character positions
+        // This mirrors the wrap_spans logic used in rendering
+        let mut lines: Vec<(usize, usize)> = Vec::new(); // (start_char, end_char) for each line
+        let mut current_width = 0;
+        let mut line_start = 0;
+        let chars: Vec<char> = text.chars().collect();
+
+        // Split by whitespace, keeping track of positions
+        let mut i = 0;
+        while i < chars.len() {
+            // Find word boundaries (word + trailing whitespace)
+            let word_start = i;
+            while i < chars.len() && !chars[i].is_whitespace() {
+                i += 1;
+            }
+            while i < chars.len() && chars[i].is_whitespace() {
+                i += 1;
+            }
+            let word_len = i - word_start;
+
+            // Check if we need to wrap before this word
+            if current_width + word_len > wrap_width && current_width > 0 {
+                // End current line
+                lines.push((line_start, word_start));
+                line_start = word_start;
+                current_width = 0;
+            }
+
+            current_width += word_len;
+        }
+
+        // Don't forget the last line
+        if line_start < chars.len() || lines.is_empty() {
+            lines.push((line_start, chars.len()));
+        }
+
+        // Now find the character at the target line and column
+        if line_within_block >= lines.len() {
+            // Beyond last line, return end of text
+            return chars.len().saturating_sub(1);
+        }
+
+        let (line_start_char, line_end_char) = lines[line_within_block];
+        let line_len = line_end_char - line_start_char;
+
+        // Return character position at (line_start + column), clamped to line bounds
+        let char_pos = line_start_char + col_in_text.min(line_len.saturating_sub(1));
+        char_pos.min(chars.len().saturating_sub(1))
+    }
+
     /// Handle vertical navigation based on focused panel
     fn handle_vertical_navigation(&mut self, action: Action) {
         match self.state.focused_panel {
@@ -1662,6 +1965,10 @@ impl App {
                 self.remove_book(&book_id)?;
                 Ok(false)
             }
+            Command::Refresh => {
+                self.refresh_current_book()?;
+                Ok(false)
+            }
             Command::List => {
                 self.list_books();
                 Ok(false)
@@ -1885,26 +2192,64 @@ impl App {
         }
 
         // For single-block selection
+        // end_char is inclusive (the cursor position), so we need +1 to include it
         if start_block == end_block {
             let text = block_text(section.content.get(start_block)?)?;
-            Some(text.chars().skip(start_char).take(end_char - start_char).collect())
+            Some(text.chars().skip(start_char).take(end_char - start_char + 1).collect())
         } else {
             // Multi-block selection: collect text from all blocks
             let mut result = String::new();
             for block_idx in start_block..=end_block {
-                let Some(block) = section.content.get(block_idx) else { continue };
-                let Some(text) = block_text(block) else { continue };
+                let Some(block) = section.content.get(block_idx) else {
+                    continue;
+                };
+                let Some(text) = block_text(block) else {
+                    continue;
+                };
 
                 if block_idx == start_block {
                     result.push_str(&text.chars().skip(start_char).collect::<String>());
                 } else if block_idx == end_block {
-                    result.push_str(&text.chars().take(end_char).collect::<String>());
+                    // end_char is inclusive, so take end_char + 1 characters
+                    result.push_str(&text.chars().take(end_char + 1).collect::<String>());
                 } else {
                     result.push_str(&text);
                 }
                 result.push('\n');
             }
             Some(result.trim().to_string())
+        }
+    }
+
+    /// Copy selected text to clipboard (yank)
+    fn yank_selection(&mut self) {
+        let Some(text) = self.get_selected_text() else {
+            self.state.command_line.set_error("No text selected");
+            return;
+        };
+
+        if text.is_empty() {
+            self.state.command_line.set_error("No text selected");
+            return;
+        }
+
+        match arboard::Clipboard::new() {
+            Ok(mut clipboard) => match clipboard.set_text(&text) {
+                Ok(()) => {
+                    let char_count = text.chars().count();
+                    self.state
+                        .command_line
+                        .set_message(format!("Yanked {} characters", char_count));
+                    // Exit visual mode after yanking
+                    self.state.visual_mode.exit();
+                }
+                Err(e) => {
+                    self.state.command_line.set_error(format!("Failed to copy: {}", e));
+                }
+            },
+            Err(e) => {
+                self.state.command_line.set_error(format!("Clipboard unavailable: {}", e));
+            }
         }
     }
 
@@ -2127,6 +2472,58 @@ impl App {
                 self.state.command_line.set_error(format!("Book not found: {}", book_id));
             }
         }
+        Ok(())
+    }
+
+    /// Refresh the currently loaded book (clear cache and reload)
+    fn refresh_current_book(&mut self) -> Result<()> {
+        let Some(book) = &self.state.book else {
+            self.state.command_line.set_error("No book currently loaded");
+            return Ok(());
+        };
+
+        let book_id = book.metadata.id.clone();
+        let book_title = book.metadata.title.clone();
+
+        // Clear the cache
+        match storage::refresh_book(&book_id) {
+            Ok(true) => {
+                // Reload the book
+                let library = storage::Library::load()?;
+                if let Some(entry) = library.find_by_id(&book_id) {
+                    match storage::load_book(entry) {
+                        Ok(reloaded_book) => {
+                            // Preserve current position
+                            let chapter = self.state.current_chapter;
+                            let section = self.state.current_section;
+                            let scroll = self.state.content.scroll_offset;
+
+                            self.state.book = Some(reloaded_book);
+
+                            // Restore position (clamped to valid range)
+                            self.state.current_chapter = chapter;
+                            self.state.current_section = section;
+                            self.state.content.scroll_offset = scroll;
+
+                            self.state.command_line.set_message(format!(
+                                "Refreshed: {} (progress preserved)",
+                                book_title
+                            ));
+                        }
+                        Err(e) => {
+                            self.state.command_line.set_error(format!("Failed to reload: {}", e));
+                        }
+                    }
+                }
+            }
+            Ok(false) => {
+                self.state.command_line.set_error("Book not found in library");
+            }
+            Err(e) => {
+                self.state.command_line.set_error(format!("Failed to refresh: {}", e));
+            }
+        }
+
         Ok(())
     }
 

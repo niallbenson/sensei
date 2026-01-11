@@ -259,6 +259,25 @@ pub fn remove_book(book_id: &str) -> Result<bool> {
     }
 }
 
+/// Refresh a book by clearing its cache (forces re-parse on next load)
+/// Progress is preserved since it's stored separately.
+pub fn refresh_book(book_id: &str) -> Result<bool> {
+    let library = Library::load()?;
+
+    if library.find_by_id(book_id).is_some() {
+        // Just remove the cache file, not the library entry
+        if let Ok(cache_path) = book_cache_path(book_id) {
+            if cache_path.exists() {
+                fs::remove_file(&cache_path)
+                    .with_context(|| format!("Failed to remove cache file {:?}", cache_path))?;
+            }
+        }
+        Ok(true)
+    } else {
+        Ok(false)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
