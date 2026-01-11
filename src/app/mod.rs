@@ -1354,44 +1354,30 @@ impl App {
             return;
         }
 
-        // Get terminal size to calculate content panel bounds
-        let term_size = self.terminal.size().unwrap_or_default();
+        // Use the stored content area from rendering (much more accurate than calculating)
+        let (content_x, content_y, content_w, content_h) = self.state.content.content_area;
 
-        // Calculate content panel area (accounting for curriculum/notes panels and borders)
-        let curriculum_width = if self.state.panel_visibility.curriculum {
-            (term_size.width as u32 * self.state.panel_visibility.curriculum_width_percent as u32 / 100) as u16
-        } else {
-            0
-        };
-
-        let notes_width = if self.state.panel_visibility.notes {
-            (term_size.width as u32 * self.state.panel_visibility.notes_width_percent as u32 / 100) as u16
-        } else {
-            0
-        };
-
-        // Content panel starts after curriculum, ends before notes
-        // Account for panel border (1 char on each side)
-        let content_start_x = curriculum_width + 1;
-        let content_end_x = term_size.width.saturating_sub(notes_width).saturating_sub(1);
-        let content_start_y: u16 = 2; // After title bar
-        let content_end_y = term_size.height.saturating_sub(2); // Before command line
+        // If content area hasn't been set yet, skip
+        if content_w == 0 || content_h == 0 {
+            return;
+        }
 
         let col = mouse_event.column;
         let row = mouse_event.row;
 
         // Check if mouse is within content panel bounds
-        if col < content_start_x || col >= content_end_x || row < content_start_y || row >= content_end_y {
+        if col < content_x || col >= content_x + content_w || row < content_y || row >= content_y + content_h {
             return;
         }
+
+        // Calculate position relative to content area
+        let rel_col = col - content_x;
+        let rel_row = row - content_y;
 
         match mouse_event.kind {
             MouseEventKind::Down(MouseButton::Left) => {
                 // Start selection - convert screen position to block/char
-                if let Some((block, char_pos)) = self.screen_to_text_position(
-                    col - content_start_x,
-                    row - content_start_y,
-                ) {
+                if let Some((block, char_pos)) = self.screen_to_text_position(rel_col, rel_row) {
                     // Enter cursor mode and start visual selection
                     self.state.content.cursor_block = block;
                     self.state.content.cursor_char = char_pos;
@@ -1411,10 +1397,7 @@ impl App {
             MouseEventKind::Drag(MouseButton::Left) => {
                 // Continue selection if we started one
                 if self.mouse_selection.is_some() {
-                    if let Some((block, char_pos)) = self.screen_to_text_position(
-                        col - content_start_x,
-                        row - content_start_y,
-                    ) {
+                    if let Some((block, char_pos)) = self.screen_to_text_position(rel_col, rel_row) {
                         // Update cursor position (selection end)
                         self.state.content.cursor_block = block;
                         self.state.content.cursor_char = char_pos;
@@ -1424,10 +1407,7 @@ impl App {
             MouseEventKind::Up(MouseButton::Left) => {
                 // End selection
                 if self.mouse_selection.is_some() {
-                    if let Some((block, char_pos)) = self.screen_to_text_position(
-                        col - content_start_x,
-                        row - content_start_y,
-                    ) {
+                    if let Some((block, char_pos)) = self.screen_to_text_position(rel_col, rel_row) {
                         self.state.content.cursor_block = block;
                         self.state.content.cursor_char = char_pos;
                     }
@@ -1578,66 +1558,58 @@ impl App {
         line_within_block: usize,
         col_in_text: usize,
     ) -> usize {
-        if wrap_width == 0 {
-            return col_in_text.min(text.chars().count().saturating_sub(1));
+        if wrap_width == 0 || text.is_empty() {
+            return 0;
         }
 
-        // Simulate word wrapping to find character position
-        let mut current_line = 0;
+        // Build wrapped lines to find exact character positions
+        // This mirrors the wrap_spans logic used in rendering
+        let mut lines: Vec<(usize, usize)> = Vec::new(); // (start_char, end_char) for each line
         let mut current_width = 0;
-        let mut char_pos = 0;
+        let mut line_start = 0;
         let chars: Vec<char> = text.chars().collect();
 
-        // Split into words (keeping whitespace)
+        // Split by whitespace, keeping track of positions
         let mut i = 0;
-
         while i < chars.len() {
-            // Find end of current word
-            let mut word_end = i;
-            while word_end < chars.len() && !chars[word_end].is_whitespace() {
-                word_end += 1;
+            // Find word boundaries (word + trailing whitespace)
+            let word_start = i;
+            while i < chars.len() && !chars[i].is_whitespace() {
+                i += 1;
             }
-            // Include trailing whitespace
-            while word_end < chars.len() && chars[word_end].is_whitespace() {
-                word_end += 1;
+            while i < chars.len() && chars[i].is_whitespace() {
+                i += 1;
             }
+            let word_len = i - word_start;
 
-            let word_len = word_end - i;
-
-            // Check if we need to wrap
+            // Check if we need to wrap before this word
             if current_width + word_len > wrap_width && current_width > 0 {
-                current_line += 1;
+                // End current line
+                lines.push((line_start, word_start));
+                line_start = word_start;
                 current_width = 0;
             }
 
-            // Check if we've reached our target line
-            if current_line == line_within_block {
-                // We're on the right line, add column offset
-                if current_width + col_in_text <= word_len || i + col_in_text >= chars.len() {
-                    return (char_pos + col_in_text).min(chars.len().saturating_sub(1));
-                }
-            }
-
-            if current_line > line_within_block {
-                // We've passed the target line, return position at end of previous line
-                return char_pos.saturating_sub(1);
-            }
-
-            char_pos += word_len;
             current_width += word_len;
-            i = word_end;
         }
 
-        // If we reach here, position at end of text or based on column
-        let target = if line_within_block == current_line {
-            // On the last line
-            let line_start_char = char_pos.saturating_sub(current_width);
-            (line_start_char + col_in_text).min(chars.len().saturating_sub(1))
-        } else {
-            chars.len().saturating_sub(1)
-        };
+        // Don't forget the last line
+        if line_start < chars.len() || lines.is_empty() {
+            lines.push((line_start, chars.len()));
+        }
 
-        target.min(chars.len().saturating_sub(1))
+        // Now find the character at the target line and column
+        if line_within_block >= lines.len() {
+            // Beyond last line, return end of text
+            return chars.len().saturating_sub(1);
+        }
+
+        let (line_start_char, line_end_char) = lines[line_within_block];
+        let line_len = line_end_char - line_start_char;
+
+        // Return character position at (line_start + column), clamped to line bounds
+        let char_pos = line_start_char + col_in_text.min(line_len.saturating_sub(1));
+        char_pos.min(chars.len().saturating_sub(1))
     }
 
     /// Handle vertical navigation based on focused panel

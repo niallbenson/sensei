@@ -112,6 +112,7 @@ pub fn draw_with_notes(
     state.content.visible_height = visible_height;
     state.content.block_line_offsets = block_offsets;
     state.content.content_width = content_width;
+    state.content.content_area = (content_area.x, content_area.y, content_area.width, content_area.height);
 
     // Clamp scroll offset
     state.content.clamp_scroll();
@@ -239,6 +240,7 @@ pub fn draw_with_images(
     state.content.visible_height = visible_height;
     state.content.block_line_offsets = block_offsets.clone();
     state.content.content_width = content_width;
+    state.content.content_area = (content_area.x, content_area.y, content_area.width, content_area.height);
 
     // Clamp scroll offset
     state.content.clamp_scroll();
@@ -671,7 +673,8 @@ fn render_heading(lines: &mut Vec<Line<'static>>, level: u8, text: &str, theme: 
     // Parse heading text to style code parts differently
     let mut spans: Vec<Span<'static>> = Vec::new();
     if !prefix.is_empty() {
-        spans.push(Span::styled(prefix, base_style));
+        // Use plain style for padding to avoid underline extending into margin
+        spans.push(Span::raw(prefix));
     }
 
     let mut in_code = false;
