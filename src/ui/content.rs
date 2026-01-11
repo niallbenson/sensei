@@ -111,6 +111,7 @@ pub fn draw_with_notes(
     state.content.total_lines = total_lines;
     state.content.visible_height = visible_height;
     state.content.block_line_offsets = block_offsets;
+    state.content.content_width = content_width;
 
     // Clamp scroll offset
     state.content.clamp_scroll();
@@ -237,6 +238,7 @@ pub fn draw_with_images(
     state.content.total_lines = total_lines;
     state.content.visible_height = visible_height;
     state.content.block_line_offsets = block_offsets.clone();
+    state.content.content_width = content_width;
 
     // Clamp scroll offset
     state.content.clamp_scroll();

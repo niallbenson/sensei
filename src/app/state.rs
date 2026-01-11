@@ -122,6 +122,8 @@ pub struct ContentState {
     pub cursor_blink_frame: usize,
     /// Starting line number for each content block (computed during render)
     pub block_line_offsets: Vec<usize>,
+    /// Content width in characters (computed during render)
+    pub content_width: usize,
     /// Whether the section footer buttons are focused
     pub footer_focused: bool,
     /// Which footer button is selected (0 = Quiz, 1 = Next)

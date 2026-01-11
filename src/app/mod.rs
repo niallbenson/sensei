@@ -1460,6 +1460,8 @@ impl App {
 
     /// Convert screen coordinates (relative to content panel) to block index and character position
     fn screen_to_text_position(&self, col: u16, row: u16) -> Option<(usize, usize)> {
+        use crate::book::ContentBlock;
+
         let book = self.state.book.as_ref()?;
         let section = book.get_section(self.state.current_chapter, self.state.current_section)?;
 
@@ -1482,25 +1484,160 @@ impl App {
         let block = section.content.get(block_idx)?;
         let block_start_line = offsets.get(block_idx).copied().unwrap_or(0);
         let line_within_block = target_line.saturating_sub(block_start_line);
+        let content_width = self.state.content.content_width;
+        let col = col as usize;
 
-        // Get block text to calculate character position
-        let text = match block {
-            crate::book::ContentBlock::Paragraph(t) => t.clone(),
-            crate::book::ContentBlock::Heading { text, .. } => text.clone(),
-            crate::book::ContentBlock::Blockquote(t) => t.clone(),
-            crate::book::ContentBlock::Code(cb) => cb.code.clone(),
-            crate::book::ContentBlock::UnorderedList(items) => items.join("\n"),
-            crate::book::ContentBlock::OrderedList(items) => items.join("\n"),
-            _ => return Some((block_idx, 0)),
+        let char_pos = match block {
+            ContentBlock::Paragraph(text) => {
+                // Paragraphs: 2 spaces padding, wrapped at content_width - 4
+                let padding = 2;
+                let wrap_width = content_width.saturating_sub(4).max(1);
+                let col_in_text = col.saturating_sub(padding);
+
+                // Calculate character position by simulating word wrap
+                self.calculate_wrapped_char_pos(text, wrap_width, line_within_block, col_in_text)
+            }
+            ContentBlock::Heading { text, level } => {
+                // Headings: variable padding based on level, single line (usually)
+                let padding = match level {
+                    1..=3 => 2,
+                    4 => 4,
+                    _ => 6,
+                };
+                let col_in_text = col.saturating_sub(padding);
+                col_in_text.min(text.chars().count().saturating_sub(1))
+            }
+            ContentBlock::Code(code) => {
+                // Code blocks: "│  N│ " prefix (about 6 chars), then code
+                // First line is header "┌─ rust ─────", skip it
+                if line_within_block == 0 {
+                    return Some((block_idx, 0));
+                }
+
+                let code_lines: Vec<&str> = code.code.lines().collect();
+                let line_in_code = line_within_block.saturating_sub(1); // Account for header
+
+                if line_in_code >= code_lines.len() {
+                    // On closing line or beyond
+                    return Some((block_idx, code.code.chars().count().saturating_sub(1)));
+                }
+
+                // Calculate character position in the code
+                // Prefix is "│  N│ " where N is line number
+                let prefix_width = 6; // Approximate
+                let col_in_code = col.saturating_sub(prefix_width);
+
+                // Sum characters from previous lines + column in current line
+                let chars_before: usize = code_lines
+                    .iter()
+                    .take(line_in_code)
+                    .map(|l| l.chars().count() + 1) // +1 for newline
+                    .sum();
+                let current_line_len = code_lines.get(line_in_code).map(|l| l.chars().count()).unwrap_or(0);
+                let col_in_line = col_in_code.min(current_line_len);
+
+                chars_before + col_in_line
+            }
+            ContentBlock::Blockquote(text) => {
+                // Blockquotes: "│ " prefix (2 chars), wrapped at content_width - 4
+                let padding = 4; // "│ " + extra padding
+                let wrap_width = content_width.saturating_sub(4).max(1);
+                let col_in_text = col.saturating_sub(padding);
+
+                self.calculate_wrapped_char_pos(text, wrap_width, line_within_block, col_in_text)
+            }
+            ContentBlock::UnorderedList(items) => {
+                // Lists: "  • " prefix (4 chars), items may wrap
+                let padding = 4;
+                let wrap_width = content_width.saturating_sub(4).max(1);
+                let col_in_text = col.saturating_sub(padding);
+                let full_text = items.join("\n");
+
+                self.calculate_wrapped_char_pos(&full_text, wrap_width, line_within_block, col_in_text)
+            }
+            ContentBlock::OrderedList(items) => {
+                // Ordered lists: "  N. " prefix (about 5-6 chars)
+                let padding = 6;
+                let wrap_width = content_width.saturating_sub(6).max(1);
+                let col_in_text = col.saturating_sub(padding);
+                let full_text = items.join("\n");
+
+                self.calculate_wrapped_char_pos(&full_text, wrap_width, line_within_block, col_in_text)
+            }
+            _ => 0, // Images, tables, horizontal rules - just position at start
         };
 
-        // Calculate character position based on line and column within block
-        // This is approximate - proper line wrapping calculation would be more complex
-        let content_width = self.state.content.visible_height.max(40); // Approximate width
-        let char_pos = line_within_block * content_width + col as usize;
-        let char_pos = char_pos.min(text.chars().count().saturating_sub(1));
-
         Some((block_idx, char_pos))
+    }
+
+    /// Calculate character position in wrapped text given the wrap width and screen position
+    fn calculate_wrapped_char_pos(
+        &self,
+        text: &str,
+        wrap_width: usize,
+        line_within_block: usize,
+        col_in_text: usize,
+    ) -> usize {
+        if wrap_width == 0 {
+            return col_in_text.min(text.chars().count().saturating_sub(1));
+        }
+
+        // Simulate word wrapping to find character position
+        let mut current_line = 0;
+        let mut current_width = 0;
+        let mut char_pos = 0;
+        let chars: Vec<char> = text.chars().collect();
+
+        // Split into words (keeping whitespace)
+        let mut i = 0;
+
+        while i < chars.len() {
+            // Find end of current word
+            let mut word_end = i;
+            while word_end < chars.len() && !chars[word_end].is_whitespace() {
+                word_end += 1;
+            }
+            // Include trailing whitespace
+            while word_end < chars.len() && chars[word_end].is_whitespace() {
+                word_end += 1;
+            }
+
+            let word_len = word_end - i;
+
+            // Check if we need to wrap
+            if current_width + word_len > wrap_width && current_width > 0 {
+                current_line += 1;
+                current_width = 0;
+            }
+
+            // Check if we've reached our target line
+            if current_line == line_within_block {
+                // We're on the right line, add column offset
+                if current_width + col_in_text <= word_len || i + col_in_text >= chars.len() {
+                    return (char_pos + col_in_text).min(chars.len().saturating_sub(1));
+                }
+            }
+
+            if current_line > line_within_block {
+                // We've passed the target line, return position at end of previous line
+                return char_pos.saturating_sub(1);
+            }
+
+            char_pos += word_len;
+            current_width += word_len;
+            i = word_end;
+        }
+
+        // If we reach here, position at end of text or based on column
+        let target = if line_within_block == current_line {
+            // On the last line
+            let line_start_char = char_pos.saturating_sub(current_width);
+            (line_start_char + col_in_text).min(chars.len().saturating_sub(1))
+        } else {
+            chars.len().saturating_sub(1)
+        };
+
+        target.min(chars.len().saturating_sub(1))
     }
 
     /// Handle vertical navigation based on focused panel
