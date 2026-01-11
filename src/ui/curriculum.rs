@@ -119,14 +119,17 @@ pub fn draw_with_progress(
                 // Get status from progress if available
                 let status = get_section_status(progress, &book.metadata.id, &section.path);
 
-                // Section prefix with indent
+                // Section prefix parts (status styled separately for color)
                 // - For numbered chapters: show "1.1", "1.2", etc. (skip ".0" for chapter intro)
                 // - For unnumbered chapters: just show the status indicator
-                let section_prefix = match (chapter.number, section.number) {
-                    (Some(ch_num), 0) => format!("   {} {}.  ", status, ch_num), // Chapter intro
-                    (Some(ch_num), sec_num) => format!("   {} {}.{} ", status, ch_num, sec_num),
-                    (None, _) => format!("   {} ", status),
+                let (prefix_indent, prefix_number) = match (chapter.number, section.number) {
+                    (Some(ch_num), 0) => ("   ".to_string(), format!(" {}.  ", ch_num)),
+                    (Some(ch_num), sec_num) => {
+                        ("   ".to_string(), format!(" {}.{} ", ch_num, sec_num))
+                    }
+                    (None, _) => ("   ".to_string(), " ".to_string()),
                 };
+                let section_prefix_len = prefix_indent.len() + 1 + prefix_number.len(); // indent + status + number
 
                 let section_style = if is_section_selected && focused {
                     Style::default()
@@ -142,6 +145,17 @@ pub fn draw_with_progress(
                     Style::default().fg(theme.fg_secondary)
                 };
 
+                // Status style: green for completed, yellow for in-progress
+                let status_style = if is_section_selected && focused {
+                    section_style // Keep same style when selected for readability
+                } else if status == STATUS_COMPLETED {
+                    Style::default().fg(theme.success)
+                } else if status == STATUS_IN_PROGRESS {
+                    Style::default().fg(theme.warning)
+                } else {
+                    section_style
+                };
+
                 // Track where this section starts in the lines list
                 item_line_starts.push(lines.len());
 
@@ -152,14 +166,18 @@ pub fn draw_with_progress(
                 } else {
                     Style::default().fg(theme.accent_primary).add_modifier(Modifier::BOLD)
                 };
-                let wrapped_lines = wrap_with_indent(&section.title, width, section_prefix.len());
+                let wrapped_lines = wrap_with_indent(&section.title, width, section_prefix_len);
 
                 let mut in_code = false;
                 for (i, line_text) in wrapped_lines.iter().enumerate() {
                     let mut line_spans = if i == 0 {
-                        vec![Span::styled(section_prefix.clone(), section_style)]
+                        vec![
+                            Span::styled(prefix_indent.clone(), section_style),
+                            Span::styled(status, status_style),
+                            Span::styled(prefix_number.clone(), section_style),
+                        ]
                     } else {
-                        let indent = " ".repeat(section_prefix.len());
+                        let indent = " ".repeat(section_prefix_len);
                         vec![Span::styled(indent, section_style)]
                     };
                     let (spans, new_in_code) = parse_inline_code_spans_with_state(
