@@ -112,7 +112,8 @@ pub fn draw_with_notes(
     state.content.visible_height = visible_height;
     state.content.block_line_offsets = block_offsets;
     state.content.content_width = content_width;
-    state.content.content_area = (content_area.x, content_area.y, content_area.width, content_area.height);
+    state.content.content_area =
+        (content_area.x, content_area.y, content_area.width, content_area.height);
 
     // Clamp scroll offset
     state.content.clamp_scroll();
@@ -240,7 +241,8 @@ pub fn draw_with_images(
     state.content.visible_height = visible_height;
     state.content.block_line_offsets = block_offsets.clone();
     state.content.content_width = content_width;
-    state.content.content_area = (content_area.x, content_area.y, content_area.width, content_area.height);
+    state.content.content_area =
+        (content_area.x, content_area.y, content_area.width, content_area.height);
 
     // Clamp scroll offset
     state.content.clamp_scroll();

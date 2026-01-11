@@ -1366,7 +1366,11 @@ impl App {
         let row = mouse_event.row;
 
         // Check if mouse is within content panel bounds
-        if col < content_x || col >= content_x + content_w || row < content_y || row >= content_y + content_h {
+        if col < content_x
+            || col >= content_x + content_w
+            || row < content_y
+            || row >= content_y + content_h
+        {
             return;
         }
 
@@ -1397,7 +1401,8 @@ impl App {
             MouseEventKind::Drag(MouseButton::Left) => {
                 // Continue selection if we started one
                 if self.mouse_selection.is_some() {
-                    if let Some((block, char_pos)) = self.screen_to_text_position(rel_col, rel_row) {
+                    if let Some((block, char_pos)) = self.screen_to_text_position(rel_col, rel_row)
+                    {
                         // Update cursor position (selection end)
                         self.state.content.cursor_block = block;
                         self.state.content.cursor_char = char_pos;
@@ -1407,7 +1412,8 @@ impl App {
             MouseEventKind::Up(MouseButton::Left) => {
                 // End selection
                 if self.mouse_selection.is_some() {
-                    if let Some((block, char_pos)) = self.screen_to_text_position(rel_col, rel_row) {
+                    if let Some((block, char_pos)) = self.screen_to_text_position(rel_col, rel_row)
+                    {
                         self.state.content.cursor_block = block;
                         self.state.content.cursor_char = char_pos;
                     }
@@ -1427,7 +1433,8 @@ impl App {
             }
             MouseEventKind::ScrollUp => {
                 // Scroll content up
-                self.state.content.scroll_offset = self.state.content.scroll_offset.saturating_sub(3);
+                self.state.content.scroll_offset =
+                    self.state.content.scroll_offset.saturating_sub(3);
             }
             MouseEventKind::ScrollDown => {
                 // Scroll content down
@@ -1513,7 +1520,8 @@ impl App {
                     .take(line_in_code)
                     .map(|l| l.chars().count() + 1) // +1 for newline
                     .sum();
-                let current_line_len = code_lines.get(line_in_code).map(|l| l.chars().count()).unwrap_or(0);
+                let current_line_len =
+                    code_lines.get(line_in_code).map(|l| l.chars().count()).unwrap_or(0);
                 let col_in_line = col_in_code.min(current_line_len);
 
                 chars_before + col_in_line
@@ -1533,7 +1541,12 @@ impl App {
                 let col_in_text = col.saturating_sub(padding);
                 let full_text = items.join("\n");
 
-                self.calculate_wrapped_char_pos(&full_text, wrap_width, line_within_block, col_in_text)
+                self.calculate_wrapped_char_pos(
+                    &full_text,
+                    wrap_width,
+                    line_within_block,
+                    col_in_text,
+                )
             }
             ContentBlock::OrderedList(items) => {
                 // Ordered lists: "  N. " prefix (about 5-6 chars)
@@ -1542,7 +1555,12 @@ impl App {
                 let col_in_text = col.saturating_sub(padding);
                 let full_text = items.join("\n");
 
-                self.calculate_wrapped_char_pos(&full_text, wrap_width, line_within_block, col_in_text)
+                self.calculate_wrapped_char_pos(
+                    &full_text,
+                    wrap_width,
+                    line_within_block,
+                    col_in_text,
+                )
             }
             _ => 0, // Images, tables, horizontal rules - just position at start
         };
