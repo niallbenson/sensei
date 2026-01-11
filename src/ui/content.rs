@@ -1297,9 +1297,9 @@ fn parse_inline_formatting(text: &str, theme: &Theme) -> Vec<Span<'static>> {
                         .add_modifier(Modifier::BOLD),
                 ));
             }
-            '*' | '_' => {
+            '*' => {
                 // Check for bold (**) or italic (*)
-                let is_double = chars.peek() == Some(&c);
+                let is_double = chars.peek() == Some(&'*');
                 if is_double {
                     chars.next(); // consume second *
                 }
@@ -1314,8 +1314,8 @@ fn parse_inline_formatting(text: &str, theme: &Theme) -> Vec<Span<'static>> {
                 let mut found_end = false;
 
                 while let Some(next) = chars.next() {
-                    if next == c {
-                        if is_double && chars.peek() == Some(&c) {
+                    if next == '*' {
+                        if is_double && chars.peek() == Some(&'*') {
                             chars.next();
                             found_end = true;
                             break;
@@ -1336,9 +1336,84 @@ fn parse_inline_formatting(text: &str, theme: &Theme) -> Vec<Span<'static>> {
                     spans.push(Span::styled(content, style));
                 } else {
                     // Not a valid marker, treat as literal
-                    current.push(c);
+                    current.push('*');
                     if is_double {
-                        current.push(c);
+                        current.push('*');
+                    }
+                    current.push_str(&content);
+                }
+            }
+            '_' => {
+                // Underscores only count as formatting at word boundaries
+                // Check if previous char was whitespace or start of text
+                let prev_is_boundary = current.is_empty()
+                    || current.chars().last().map(|c| c.is_whitespace()).unwrap_or(true);
+
+                if !prev_is_boundary {
+                    // Mid-word underscore, treat as literal
+                    current.push('_');
+                    continue;
+                }
+
+                // Check for bold (__) or italic (_)
+                let is_double = chars.peek() == Some(&'_');
+                if is_double {
+                    chars.next(); // consume second _
+                }
+
+                if !current.is_empty() {
+                    spans
+                        .push(Span::styled(current.clone(), Style::default().fg(theme.fg_primary)));
+                    current.clear();
+                }
+
+                let mut content = String::new();
+                let mut found_end = false;
+
+                while let Some(next) = chars.next() {
+                    if next == '_' {
+                        // Check if this underscore is at a word boundary (followed by whitespace or end)
+                        let next_is_boundary = chars
+                            .peek()
+                            .map(|c| {
+                                c.is_whitespace()
+                                    || *c == '.'
+                                    || *c == ','
+                                    || *c == '!'
+                                    || *c == '?'
+                                    || *c == ':'
+                                    || *c == ';'
+                            })
+                            .unwrap_or(true);
+
+                        if is_double && chars.peek() == Some(&'_') && next_is_boundary {
+                            chars.next();
+                            found_end = true;
+                            break;
+                        } else if !is_double && next_is_boundary {
+                            found_end = true;
+                            break;
+                        } else {
+                            // Mid-word underscore in the content, include it
+                            content.push(next);
+                        }
+                    } else {
+                        content.push(next);
+                    }
+                }
+
+                if found_end {
+                    let style = if is_double {
+                        Style::default().fg(theme.fg_primary).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(theme.fg_primary).add_modifier(Modifier::ITALIC)
+                    };
+                    spans.push(Span::styled(content, style));
+                } else {
+                    // Not a valid marker, treat as literal
+                    current.push('_');
+                    if is_double {
+                        current.push('_');
                     }
                     current.push_str(&content);
                 }
@@ -2489,6 +2564,16 @@ mod tests {
         let theme = Theme::default();
         let spans = parse_inline_formatting("hello *italic* world", &theme);
         assert!(spans.len() >= 3);
+    }
+
+    #[test]
+    fn parse_inline_underscore_in_word() {
+        // Underscores within words should NOT be treated as italic markers
+        let theme = Theme::default();
+        let spans = parse_inline_formatting("hello_cargo is a directory", &theme);
+        // Should preserve the underscore in the word
+        let combined: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(combined.contains("hello_cargo"), "Expected 'hello_cargo' but got: {}", combined);
     }
 
     #[test]
