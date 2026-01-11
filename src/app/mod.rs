@@ -10,6 +10,7 @@ use anyhow::Result;
 use crossterm::{
     event::{
         self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers,
+        MouseButton, MouseEventKind,
     },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
@@ -56,6 +57,9 @@ pub struct App {
 
     /// Channel receiver for quiz generation results
     quiz_rx: Option<tokio::sync::mpsc::Receiver<QuizGenerationResult>>,
+
+    /// Mouse selection state: (is_dragging, start_block, start_char)
+    mouse_selection: Option<(usize, usize)>,
 }
 
 /// Result from quiz generation task
@@ -86,6 +90,7 @@ impl App {
             claude_rx: None,
             claude_cancel: None,
             quiz_rx: None,
+            mouse_selection: None,
         };
 
         // Apply saved panel widths from session
@@ -234,7 +239,15 @@ impl App {
             // Handle all pending events before next redraw (makes scrolling feel faster)
             let mut should_quit = false;
             while event::poll(std::time::Duration::from_millis(0))? {
-                if let Event::Key(key_event) = event::read()? {
+                let event = event::read()?;
+
+                // Handle mouse events for text selection
+                if let Event::Mouse(mouse_event) = event {
+                    self.handle_mouse_event(mouse_event);
+                    continue;
+                }
+
+                if let Event::Key(key_event) = event {
                     if key_event.kind == KeyEventKind::Press {
                         // Ctrl+C to cancel Claude streaming
                         if key_event.code == KeyCode::Char('c')
@@ -1332,6 +1345,162 @@ impl App {
             }
             Panel::Notes => {}
         }
+    }
+
+    /// Handle mouse events for text selection
+    fn handle_mouse_event(&mut self, mouse_event: crossterm::event::MouseEvent) {
+        // Only handle mouse events on the main screen in content panel
+        if !matches!(self.state.screen, Screen::Main) {
+            return;
+        }
+
+        // Get terminal size to calculate content panel bounds
+        let term_size = self.terminal.size().unwrap_or_default();
+
+        // Calculate content panel area (accounting for curriculum/notes panels and borders)
+        let curriculum_width = if self.state.panel_visibility.curriculum {
+            (term_size.width as u32 * self.state.panel_visibility.curriculum_width_percent as u32 / 100) as u16
+        } else {
+            0
+        };
+
+        let notes_width = if self.state.panel_visibility.notes {
+            (term_size.width as u32 * self.state.panel_visibility.notes_width_percent as u32 / 100) as u16
+        } else {
+            0
+        };
+
+        // Content panel starts after curriculum, ends before notes
+        // Account for panel border (1 char on each side)
+        let content_start_x = curriculum_width + 1;
+        let content_end_x = term_size.width.saturating_sub(notes_width).saturating_sub(1);
+        let content_start_y: u16 = 2; // After title bar
+        let content_end_y = term_size.height.saturating_sub(2); // Before command line
+
+        let col = mouse_event.column;
+        let row = mouse_event.row;
+
+        // Check if mouse is within content panel bounds
+        if col < content_start_x || col >= content_end_x || row < content_start_y || row >= content_end_y {
+            return;
+        }
+
+        match mouse_event.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                // Start selection - convert screen position to block/char
+                if let Some((block, char_pos)) = self.screen_to_text_position(
+                    col - content_start_x,
+                    row - content_start_y,
+                ) {
+                    // Enter cursor mode and start visual selection
+                    self.state.content.cursor_block = block;
+                    self.state.content.cursor_char = char_pos;
+                    self.state.content.cursor_mode = true;
+
+                    // Start visual mode with anchor at this position
+                    self.state.visual_mode.active = true;
+                    self.state.visual_mode.anchor_block = block;
+                    self.state.visual_mode.anchor_char = char_pos;
+
+                    // Track mouse selection start
+                    self.mouse_selection = Some((block, char_pos));
+
+                    self.state.focused_panel = Panel::Content;
+                }
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                // Continue selection if we started one
+                if self.mouse_selection.is_some() {
+                    if let Some((block, char_pos)) = self.screen_to_text_position(
+                        col - content_start_x,
+                        row - content_start_y,
+                    ) {
+                        // Update cursor position (selection end)
+                        self.state.content.cursor_block = block;
+                        self.state.content.cursor_char = char_pos;
+                    }
+                }
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                // End selection
+                if self.mouse_selection.is_some() {
+                    if let Some((block, char_pos)) = self.screen_to_text_position(
+                        col - content_start_x,
+                        row - content_start_y,
+                    ) {
+                        self.state.content.cursor_block = block;
+                        self.state.content.cursor_char = char_pos;
+                    }
+
+                    // Check if it was just a click (no drag) - clear selection
+                    if let Some((start_block, start_char)) = self.mouse_selection {
+                        if start_block == self.state.content.cursor_block
+                            && start_char == self.state.content.cursor_char
+                        {
+                            // Just a click, exit visual mode but keep cursor
+                            self.state.visual_mode.exit();
+                        }
+                    }
+
+                    self.mouse_selection = None;
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                // Scroll content up
+                self.state.content.scroll_offset = self.state.content.scroll_offset.saturating_sub(3);
+            }
+            MouseEventKind::ScrollDown => {
+                // Scroll content down
+                self.state.content.scroll_offset += 3;
+                self.state.content.clamp_scroll();
+            }
+            _ => {}
+        }
+    }
+
+    /// Convert screen coordinates (relative to content panel) to block index and character position
+    fn screen_to_text_position(&self, col: u16, row: u16) -> Option<(usize, usize)> {
+        let book = self.state.book.as_ref()?;
+        let section = book.get_section(self.state.current_chapter, self.state.current_section)?;
+
+        // Calculate which line we're on (accounting for scroll)
+        let target_line = self.state.content.scroll_offset + row as usize;
+
+        // Find which block this line belongs to using block_line_offsets
+        let offsets = &self.state.content.block_line_offsets;
+
+        let mut block_idx = 0;
+        for (idx, &offset) in offsets.iter().enumerate() {
+            if offset <= target_line {
+                block_idx = idx;
+            } else {
+                break;
+            }
+        }
+
+        // Get the block and calculate character position
+        let block = section.content.get(block_idx)?;
+        let block_start_line = offsets.get(block_idx).copied().unwrap_or(0);
+        let line_within_block = target_line.saturating_sub(block_start_line);
+
+        // Get block text to calculate character position
+        let text = match block {
+            crate::book::ContentBlock::Paragraph(t) => t.clone(),
+            crate::book::ContentBlock::Heading { text, .. } => text.clone(),
+            crate::book::ContentBlock::Blockquote(t) => t.clone(),
+            crate::book::ContentBlock::Code(cb) => cb.code.clone(),
+            crate::book::ContentBlock::UnorderedList(items) => items.join("\n"),
+            crate::book::ContentBlock::OrderedList(items) => items.join("\n"),
+            _ => return Some((block_idx, 0)),
+        };
+
+        // Calculate character position based on line and column within block
+        // This is approximate - proper line wrapping calculation would be more complex
+        let content_width = self.state.content.visible_height.max(40); // Approximate width
+        let char_pos = line_within_block * content_width + col as usize;
+        let char_pos = char_pos.min(text.chars().count().saturating_sub(1));
+
+        Some((block_idx, char_pos))
     }
 
     /// Handle vertical navigation based on focused panel
