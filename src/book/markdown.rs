@@ -119,7 +119,9 @@ pub fn parse_markdown_content(markdown: &str) -> Vec<ContentBlock> {
             Event::End(TagEnd::CodeBlock) => {
                 in_code_block = false;
                 let code = std::mem::take(&mut code_content);
-                let mut code_block = CodeBlock::new(code.trim_end());
+                // Filter out mdBook anchor comments from code blocks
+                let filtered_code = filter_anchor_comments(&code);
+                let mut code_block = CodeBlock::new(filtered_code.trim_end());
                 if let Some(lang) = code_language.take() {
                     code_block = code_block.with_language(lang);
                 }
@@ -670,16 +672,34 @@ fn extract_function(lines: &[&str], fn_start: &str, is_rustdoc: bool) -> String 
     if is_rustdoc { filter_rustdoc_hidden(&result) } else { result }
 }
 
-/// Filter out rustdoc hidden lines (lines starting with # in doc examples)
+/// Filter out rustdoc hidden lines and mdBook anchor comments
 fn filter_rustdoc_hidden(content: &str) -> String {
     content
         .lines()
         .filter(|line| {
             let trimmed = line.trim();
-            // Keep lines that don't start with # (hidden marker in rustdoc)
-            // But keep lines that are just "#" (empty hidden) or "# " followed by code
-            // Actually in rustdoc, # at start of line in code blocks hides the line
-            !trimmed.starts_with("# ") && trimmed != "#"
+            // Filter rustdoc hidden lines (# at start hides the line)
+            if trimmed.starts_with("# ") || trimmed == "#" {
+                return false;
+            }
+            // Filter mdBook anchor comments (// ANCHOR: name, // ANCHOR_END: name)
+            if trimmed.starts_with("// ANCHOR:") || trimmed.starts_with("// ANCHOR_END:") {
+                return false;
+            }
+            true
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Filter out mdBook anchor comments from code blocks
+fn filter_anchor_comments(content: &str) -> String {
+    content
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            // Filter mdBook anchor comments (// ANCHOR: name, // ANCHOR_END: name)
+            !trimmed.starts_with("// ANCHOR:") && !trimmed.starts_with("// ANCHOR_END:")
         })
         .collect::<Vec<_>>()
         .join("\n")
